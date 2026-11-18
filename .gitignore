@@ -15,4 +15,5 @@ node_modules/
 !/vditor-master/types/
 !/vditor-master/LICENSE
 !/vditor-master/package.json
+!/vditor-master/tsconfig.json
 .DS_Store
