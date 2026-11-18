@@ -14,6 +14,20 @@ window.VM_RENDER = async ({ markdown, baseURL, options, settings, dark, appearan
     markdown: { sanitize: true, toc: true, mark: true, linkBase: baseURL },
     math: { engine: 'KaTeX' }, theme: { current: isDark ? 'dark' : 'light', path: `${cdn}/dist/css/content-theme` },
     hljs: { enable: true, style: isDark ? 'github-dark' : 'github', lineNumber: false },
+    transform: (html: string) => {
+      const template = document.createElement('template');
+      template.innerHTML = html;
+      for (const image of template.content.querySelectorAll<HTMLImageElement>('img[src]')) {
+        const source = image.getAttribute('src');
+        if (source && !/^[a-z][a-z\d+.-]*:/i.test(source)) image.setAttribute('src', new URL(source, baseURL).href);
+        const height = image.getAttribute('height');
+        if (height && /^\d+$/.test(height) && !image.style.height) {
+          image.style.height = height + 'px';
+          image.style.objectFit ||= 'contain';
+        }
+      }
+      return template.innerHTML;
+    },
   });
   const bg = pageTheme?.colors.bg || (isDark ? '#20292c' : '#ffffff');
   const fg = pageTheme?.colors.fg || (isDark ? '#e4e4e4' : '#24292f');

@@ -3,7 +3,7 @@ export const PREFIX = 'vditorMarkdown';
 export const APP_NAME = '墨尔 markdown editor';
 export const EXTENSION_ID = 'qycools.moye-markdown';
 export const actions = [
-  ['outline', '大纲'], ['source', '在 VS Code 中编辑'], ['save', '保存'],
+  ['outline', '大纲'], ['mindmap', '思维导图'], ['source', '在 VS Code 中编辑'], ['save', '保存'],
   ['headings', '标题'], ['bold', '粗体'], ['italic', '斜体'], ['strike', '删除线'], ['link', '链接'],
   ['textColor', '设置字体配色'], ['backgroundColor', '设置背景配色'], ['export', '导出'],
   ['theme', '选择主题'], ['brightness', '切换明暗主题'],

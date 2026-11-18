@@ -5,6 +5,7 @@ import { expandHome } from './browser';
 import { actions, APP_NAME, defaults, escapeHTML, minimalEdit, PREFIX, VIEW_TYPE, type Settings, validateExport, validPageWidth, validPalette } from './shared';
 import { exportDocument } from './export';
 import { themeCatalog, clearThemeCache } from './codeTheme';
+import { localImageData } from './localImages';
 
 type Session = { panel: vscode.WebviewPanel; document: vscode.TextDocument; queue: Promise<void>; applying: boolean; id: string; dialogOpen: boolean };
 const sessions = new Set<Session>();
@@ -27,7 +28,10 @@ export function activate(context: vscode.ExtensionContext) {
     async resolveCustomTextEditor(document, panel) {
       const session: Session = { document, panel, queue: Promise.resolve(), applying: false, id: randomBytes(8).toString('hex'), dialogOpen: false };
       sessions.add(session); active = session;
-      const roots = [context.extensionUri, vscode.Uri.file(path.dirname(document.uri.fsPath)), ...(vscode.workspace.workspaceFolders || []).map(f => f.uri)];
+      const documentDirectory = vscode.Uri.joinPath(document.uri, '..');
+      const imageRoots = [documentDirectory, ...(vscode.workspace.workspaceFolders || []).map(f => f.uri)];
+      const roots = [context.extensionUri, ...imageRoots];
+      let imageQueue = Promise.resolve();
       panel.webview.options = { enableScripts: true, localResourceRoots: roots };
       panel.webview.html = webviewHTML(panel.webview, context, document, settings(document.uri));
       const disposables = [
@@ -41,13 +45,13 @@ export function activate(context: vscode.ExtensionContext) {
           }
         }),
         panel.webview.onDidReceiveMessage(message => {
-          session.queue = session.queue.then(async () => {
-            await handleMessage(message, session);
-          }).catch(error => {
+          const handle = () => handleMessage(message, session).catch(error => {
             const text = error instanceof Error ? error.message : String(error);
             void panel.webview.postMessage({ type: 'error', message: text, requestId: message?.requestId });
             void vscode.window.showErrorMessage(`${APP_NAME}：${text}`);
           });
+          if (message?.type === 'localImage') imageQueue = imageQueue.then(handle);
+          else session.queue = session.queue.then(handle);
         }),
       ];
       panel.onDidDispose(() => { sessions.delete(session); if (active === session) { active = undefined; void vscode.commands.executeCommand('setContext', 'vditorMarkdown.dialogOpen', false); } disposables.forEach(d => d.dispose()); });
@@ -94,6 +98,9 @@ export function activate(context: vscode.ExtensionContext) {
           case 'clipboardWrite':
             if (typeof message.text !== 'string') throw new Error('剪贴板内容无效。');
             await vscode.env.clipboard.writeText(message.text); await reply(true); break;
+          case 'localImage':
+            await reply(typeof message.source === 'string' ? await localImageData(message.source, document.uri, imageRoots) ?? null : null);
+            break;
           case 'dialog':
             s.dialogOpen = !!message.open;
             if (panel.active) await vscode.commands.executeCommand('setContext', 'vditorMarkdown.dialogOpen', s.dialogOpen); break;
@@ -114,6 +121,31 @@ export function activate(context: vscode.ExtensionContext) {
           case 'browse': {
             const folder = await vscode.window.showOpenDialog({ canSelectFiles: false, canSelectFolders: true, canSelectMany: false, openLabel: '选择导出目录', defaultUri: vscode.Uri.file(path.dirname(document.uri.fsPath)) });
             await reply(folder?.[0].fsPath); break;
+          }
+          case 'exportMindmap': {
+            const { format, text, detailed } = message;
+            if ((format !== 'svg' && format !== 'md') || typeof text !== 'string' || !text || text.length > 32 * 1024 * 1024) {
+              throw new Error('思维导图导出数据无效。');
+            }
+            const stem = path.basename(document.uri.fsPath).replace(/\.(md|markdown)$/i, '') || '文档';
+            const folder = document.isUntitled ? vscode.workspace.workspaceFolders?.[0]?.uri : documentDirectory;
+            const filename = `${stem}-${detailed ? '详细' : '精简'}思维导图.${format}`;
+            const target = await vscode.window.showSaveDialog({
+              defaultUri: folder && vscode.Uri.joinPath(folder, filename),
+              filters: { [format === 'svg' ? 'SVG 矢量图' : 'Markdown']: [format] },
+              saveLabel: '导出思维导图',
+            });
+            if (!target) { await reply({ cancelled: true }); break; }
+            const temporary = target.with({ path: `${target.path}.${randomBytes(5).toString('hex')}.tmp` });
+            try {
+              await vscode.workspace.fs.writeFile(temporary, Buffer.from(text, 'utf8'));
+              await vscode.workspace.fs.rename(temporary, target, { overwrite: true });
+            } catch (error) {
+              await vscode.workspace.fs.delete(temporary).then(undefined, () => {});
+              throw error;
+            }
+            await reply({ path: target.fsPath });
+            break;
           }
           case 'export': {
             if (!vscode.workspace.isTrusted) throw new Error('请先信任工作区，再运行本机导出。');
@@ -183,7 +215,7 @@ function isDark() { return [vscode.ColorThemeKind.Dark, vscode.ColorThemeKind.Hi
 function webviewHTML(webview: vscode.Webview, context: vscode.ExtensionContext, document: vscode.TextDocument, settings: Settings) {
   const nonce = randomBytes(18).toString('base64');
   const asset = (name: string) => webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, name)).toString();
-  const base = webview.asWebviewUri(vscode.Uri.file(path.dirname(document.uri.fsPath) + path.sep)).toString();
+  const base = webview.asWebviewUri(document.uri).toString();
   const catalog = themeCatalog();
   const boot = JSON.stringify({ cdn: asset('media/vditor'), base, settings, dark: isDark(), ...catalog, codePalette: catalog.themes.find(theme => theme.id === catalog.activeTheme)?.tokens || {}, filename: path.basename(document.uri.fsPath) }).replace(/</g, '\\u003c');
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data: blob: https: http:; media-src ${webview.cspSource} https: http: data:; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource} data:; script-src 'nonce-${nonce}' ${webview.cspSource} 'wasm-unsafe-eval'; worker-src blob: ${webview.cspSource}; connect-src ${webview.cspSource}; object-src https://www.plantuml.com; frame-src https:;"><link href="${asset('dist/webview.css')}" rel="stylesheet"><title>${escapeHTML(path.basename(document.uri.fsPath))}</title></head><body><div id="app"><div id="editor"></div><footer id="status" aria-live="polite" hidden></footer></div><div id="overlay"></div><script nonce="${nonce}">window.VM_BOOT=${boot};</script><script nonce="${nonce}" src="${asset('dist/webview.js')}"></script></body></html>`;

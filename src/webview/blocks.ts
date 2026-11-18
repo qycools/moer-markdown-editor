@@ -1,19 +1,17 @@
 import { processCodeRender } from '@local/code';
-import { highlightToolbarWYSIWYG, genImagePopover } from '@local/blockTools';
 import { icon } from './icons';
 import { viewportLayer } from './viewportLayer';
+import { canEditImage } from './imageTools';
 
 const types = [['p', '文本'], ['ordered-list', '有序列表'], ['list', '无序列表'], ['check', '任务列表'], ['code', '代码块'], ['callout', '高亮块'], ['quote', '引用'], ['columns', '分栏'], ['fold', '折叠块']];
 const typeIcons: Record<string, string> = { p: 'headings', 'ordered-list': 'ordered-list', list: 'list', check: 'check', code: 'code', callout: 'backgroundColor', quote: 'quote', columns: 'columns', fold: 'fold' };
 
-export function installBlockMenus(editor: any, options: { submit: () => void; rpc: (type: string, data?: object) => Promise<any>; toast: (text: string, error?: boolean) => void; beforeOpen: () => void; menuState: (open: boolean) => void }) {
+export function installBlockMenus(editor: any, options: { submit: () => void; rpc: (type: string, data?: object) => Promise<any>; toast: (text: string, error?: boolean) => void; beforeOpen: () => void; menuState: (open: boolean) => void; openProperties: (block: HTMLElement) => void }) {
   const handles = new Map<HTMLElement, HTMLButtonElement>(), layers = new Map<HTMLElement, HTMLElement>();
   let menu: HTMLElement | undefined, activeBlock: HTMLElement | undefined, scheduled = false;
-  let nativeHome: HTMLElement | undefined;
   const surface = () => editor.vditor.currentMode === 'sv' ? undefined : editor.vditor[editor.vditor.currentMode].element as HTMLElement;
   function close() {
     const wasOpen = !!menu;
-    if (nativeHome) { const native = editor.vditor.wysiwyg.popover as HTMLElement; nativeHome.append(native); native.classList.remove('vm-native-in-menu'); native.style.display = 'none'; nativeHome = undefined; }
     menu?.remove(); menu = undefined; activeBlock = undefined;
     handles.forEach(handle => handle.setAttribute('aria-expanded', 'false')); if (wasOpen) options.menuState(false);
   }
@@ -91,21 +89,10 @@ export function installBlockMenus(editor: any, options: { submit: () => void; rp
     if (panel.dataset.kind === kind) return;
     panel.dataset.kind = kind; panel.hidden = false;
     panel.style.top = '0';
-    if (nativeHome) { const native = editor.vditor.wysiwyg.popover as HTMLElement; nativeHome.append(native); native.classList.remove('vm-native-in-menu'); native.style.display = 'none'; nativeHome = undefined; }
     if (kind === 'convert' || kind === 'add') {
       const action = kind === 'convert' ? 'convert' : 'add';
       panel.innerHTML = `<div class="block-heading-grid">${[1, 2, 3, 4, 5, 6].map(n => `<button type="button" role="menuitem" data-block-action="${action}:h${n}">H${n}</button>`).join('')}</div><div class="block-type-grid">${types.map(([type, label]) => `<button type="button" role="menuitem" data-block-action="${action}:${type}">${icon(typeIcons[type])}<span>${label}</span></button>`).join('')}</div>`;
     } else if (kind === 'indent') panel.innerHTML = `${[['in', '增加缩进'], ['out', '减少缩进'], ['up', '上移'], ['down', '下移']].map(([action, label]) => `<button type="button" role="menuitem" data-block-action="${action}">${label}</button>`).join('')}`;
-    else if (kind === 'properties' && editor.vditor.currentMode === 'wysiwyg') {
-      focus(activeBlock); const img = activeBlock.querySelector<HTMLImageElement>('img');
-      if (img) genImagePopover({ target: img } as unknown as Event, editor.vditor); else highlightToolbarWYSIWYG(editor.vditor);
-      panel.innerHTML = '<p class="muted">正在读取编辑选项…</p>';
-      const currentMenu = menu, currentBlock = activeBlock;
-      window.setTimeout(() => {
-        if (menu !== currentMenu || activeBlock !== currentBlock || !panel.isConnected) return;
-        const native = editor.vditor.wysiwyg.popover as HTMLElement; nativeHome = native.parentElement!; native.classList.add('vm-native-in-menu'); panel.replaceChildren(native);
-      }, img ? 0 : 230);
-    }
     const rect = menu.getBoundingClientRect();
     panel.style.left = rect.right + panel.offsetWidth + 8 <= innerWidth ? '100%' : 'auto'; panel.style.right = panel.style.left === 'auto' ? '100%' : 'auto';
     if (rect.left < panel.offsetWidth && panel.style.left === 'auto') { panel.style.left = '0'; panel.style.right = 'auto'; panel.style.top = '100%'; }
@@ -114,7 +101,8 @@ export function installBlockMenus(editor: any, options: { submit: () => void; rp
   }
   async function run(action: string) {
     const block = activeBlock; if (!block?.isConnected) return;
-    if (['convert', 'indent', 'add', 'properties'].includes(action)) { submenu(action); return; }
+    if (['convert', 'indent', 'add'].includes(action)) { submenu(action); return; }
+    if (action === 'properties') { close(); options.openProperties(block); return; }
     try {
       const text = markdown(block);
       if (action === 'copy' || action === 'cut') { await options.rpc('clipboardWrite', { text: text + '\n' }); if (action === 'cut' && block.isConnected) remove(block); else { close(); options.toast('段落已复制'); } }
@@ -137,7 +125,9 @@ export function installBlockMenus(editor: any, options: { submit: () => void; rp
     close(); options.beforeOpen(); activeBlock = block; handle.setAttribute('aria-expanded', 'true');
     const buttons = [['convert', 'convert', '转化为', true], ['delete', 'trash', '删除', false], ['copy', 'copy', '复制', false], ['cut', 'cut', '剪切', false], ['indent', 'indent', '缩进', true], ['add', 'add', '在下方添加', true]] as const;
     menu = document.createElement('div'); menu.id = 'block-menu'; menu.className = 'block-menu';
-    menu.innerHTML = `<div class="block-menu-main" role="menu" aria-label="段落操作">${buttons.map(([action, image, label, sub]) => `<button type="button" role="menuitem" data-block-action="${action}" ${sub ? 'aria-haspopup="menu"' : ''}>${icon(image)}<span>${label}</span>${sub ? '<span class="block-chevron">›</span>' : ''}</button>`).join('')}${editor.vditor.currentMode === 'wysiwyg' && block.querySelector('img,td,th') ? '<button type="button" role="menuitem" data-block-action="properties">编辑属性 <span class="block-chevron">›</span></button>' : ''}</div><div class="block-menu-sub" role="menu" aria-label="段落子菜单" hidden></div>`;
+    const image = block.querySelector('img');
+    const properties = block.tagName === 'TABLE' ? '表格操作' : image && canEditImage(image) ? '图片操作' : '';
+    menu.innerHTML = `<div class="block-menu-main" role="menu" aria-label="段落操作">${buttons.map(([action, image, label, sub]) => `<button type="button" role="menuitem" data-block-action="${action}" ${sub ? 'aria-haspopup="menu"' : ''}>${icon(image)}<span>${label}</span>${sub ? '<span class="block-chevron">›</span>' : ''}</button>`).join('')}${properties ? `<button type="button" role="menuitem" data-block-action="properties">${properties}</button>` : ''}</div><div class="block-menu-sub" role="menu" aria-label="段落子菜单" hidden></div>`;
     document.body.append(menu); const rect = handle.getBoundingClientRect();
     menu.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - menu.offsetWidth - 8))}px`;
     menu.style.top = `${Math.max(8, Math.min(rect.bottom + 3, innerHeight - menu.offsetHeight - 8))}px`;
@@ -148,7 +138,7 @@ export function installBlockMenus(editor: any, options: { submit: () => void; rp
       const buttons = [...menu!.querySelectorAll<HTMLButtonElement>('button')].filter(button => !!button.getClientRects().length), current = buttons.indexOf(document.activeElement as HTMLButtonElement);
       if (event.key === 'Escape') { event.preventDefault(); const target = activeBlock; close(); if (target) focus(target); }
       else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); buttons[(current + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus(); }
-      else if (event.key === 'ArrowRight') { const action = (document.activeElement as HTMLElement).dataset.blockAction; if (action) submenu(action); }
+      else if (event.key === 'ArrowRight' && document.activeElement?.hasAttribute('aria-haspopup')) { const action = (document.activeElement as HTMLElement).dataset.blockAction; if (action) submenu(action); }
     });
     menu.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true }); options.menuState(true);
   }

@@ -1,6 +1,7 @@
 import {Constants} from "../constants";
 import {addScript} from "../util/addScript";
 import {markmapRenderAdapter} from "./adapterRender";
+import {markmapFitEvent, markmapSource, setMarkmapHeight} from "./markmapSize";
 
 declare const window: any;
 const enabled: Record<string, boolean> = {};
@@ -18,27 +19,50 @@ const transform = (transformer: any,content: string)=>{
     return result;
 }
 
-const init = (el: HTMLElement,code: string) => {
-    const { Transformer, Markmap, deriveOptions , globalCSS} = window.markmap;
+const init = (el: HTMLElement, code: string, signal?: AbortSignal) => {
+    const {Transformer, Markmap, deriveOptions} = window.markmap;
     const transformer = new Transformer();
-    el.innerHTML = '<svg style="width:100%"></svg>';
+    const source = markmapSource(code);
+    setMarkmapHeight(el, source.height);
+    el.innerHTML = '<svg style="display:block;width:100%;height:var(--vm-markmap-height)"></svg>';
     const svg = el.firstChild as SVGElement;
     const mm = Markmap.create(svg, null);
-    const { root, frontmatter } = transform(transformer, code);
+    let viewport = svg.getBoundingClientRect();
+    // Relative SVG lengths are unavailable to D3 after Vditor replaces a preview.
+    mm.zoom.extent(() => {
+        const current = svg.getBoundingClientRect();
+        if (current.width && current.height) {
+            viewport = current;
+        }
+        return [[0, 0], [viewport.width || 1, viewport.height || 1]];
+    });
+    svg.addEventListener(markmapFitEvent, () => {
+        mm.svg.interrupt();
+        void mm.fit();
+    });
+    signal?.addEventListener("abort", () => {
+        mm.svg.interrupt();
+        mm.svg.selectAll("*").interrupt();
+        mm.destroy();
+    }, {once: true});
+    const {root, frontmatter} = transform(transformer, source.code);
     const markmapOptions = frontmatter?.markmap;
     const frontmatterOptions = deriveOptions(markmapOptions);
     mm.setData(root, frontmatterOptions);
-    mm.fit();
-  }
+    return mm.fit();
+};
 
 
-export const markmapRender = (element: (HTMLElement | Document) = document, cdn = Constants.CDN) => {
+export const markmapRender = (element: (HTMLElement | Document) = document, cdn = Constants.CDN, signal?: AbortSignal) => {
     const markmapElements = markmapRenderAdapter.getElements(element);
     if (markmapElements.length === 0) {
         return;
     }
-    addScript(`${cdn}/dist/js/markmap/markmap.min.js`, "vditorMarkerScript").then(() => {
-        markmapElements.forEach((item) => {
+    return addScript(`${cdn}/dist/js/markmap/markmap.min.js`, "vditorMarkerScript").then(() => {
+        if (signal?.aborted) {
+            return;
+        }
+        return Promise.all([...markmapElements].map((item) => {
             const code = markmapRenderAdapter.getCode(item);
             if (item.getAttribute("data-processed") === "true" || code.trim() === "") {
                 return;
@@ -46,11 +70,12 @@ export const markmapRender = (element: (HTMLElement | Document) = document, cdn 
             const render = document.createElement("div")
             render.className = "language-markmap"
             item.parentNode.appendChild(render)
-            init(render,code)
+            const ready = init(render, code, signal);
 
             if(item.parentNode.childNodes[0].nodeName == "CODE"){
                 item.parentNode.removeChild(item.parentNode.childNodes[0])
             }
-        });
+            return ready;
+        }));
     });
 };

@@ -2,6 +2,8 @@ import { processCodeRender } from '@local/code';
 import { escapeHTML as esc } from '../shared';
 import { icon } from './icons';
 import { viewportLayer } from './viewportLayer';
+import { markmapSource } from '../../vditor-master/src/ts/markdown/markmapSize';
+import { createMarkmapResize } from './markmapBlocks';
 
 const languages = ['', 'plaintext', 'javascript', 'typescript', 'json', 'json5', 'html', 'css', 'python', 'java', 'c', 'cpp', 'csharp', 'go', 'rust', 'bash', 'powershell', 'sql', 'yaml', 'xml', 'markdown', 'vue', 'jsx', 'tsx', 'kotlin', 'swift', 'ruby', 'php', 'diff', 'dockerfile', 'mermaid', 'graphviz', 'echarts', 'flowchart', 'wavedrom', 'markmap', 'mindmap', 'plantuml', 'abc', 'smiles'];
 
@@ -12,6 +14,7 @@ export function installCodeBlocks(editor: any, options: {
   toast: (text: string, error?: boolean) => void;
 }) {
   const bars = new Map<HTMLElement, HTMLElement>();
+  const resizers = new Map<HTMLElement, ReturnType<typeof createMarkmapResize>>();
   const layers = new Map<HTMLElement, HTMLElement>();
   let scheduled = false;
   const sourceOf = (block: HTMLElement) => block.querySelector<HTMLElement>('pre > code');
@@ -29,6 +32,10 @@ export function installCodeBlocks(editor: any, options: {
     bar.addEventListener('pointerdown', event => { if ((event.target as Element).closest('button')) event.preventDefault(); });
     bar.querySelector<HTMLSelectElement>('.vm-code-language')!.onchange = event => {
       const language = (event.target as HTMLSelectElement).value, source = sourceOf(block)!;
+      if (languageOf(source) === 'markmap' && language !== 'markmap') {
+        const code = markmapSource(source.textContent || '').code;
+        if (code !== source.textContent) source.textContent = code;
+      }
       source.className = language ? `language-${language}` : '';
       const info = block.querySelector('[data-type="code-block-info"]'); if (info) info.textContent = '\u200b' + language;
       render(block);
@@ -75,6 +82,12 @@ export function installCodeBlocks(editor: any, options: {
     const mode = editor.vditor.currentMode;
     const surface = mode === 'sv' ? null : editor.vditor[mode].element as HTMLElement;
     for (const [block, bar] of bars) if (!block.isConnected || !surface?.contains(block)) { bar.remove(); bars.delete(block); }
+    for (const [block, resize] of resizers) {
+      if (!surface?.contains(block) || !block.contains(resize.graph) || !resize.source.classList.contains('language-markmap')) {
+        resize.handle.remove();
+        resizers.delete(block);
+      }
+    }
     if (!surface) return;
     const { layer, origin } = viewportLayer(surface.parentElement!, layers, 'vm-code-layer');
     for (const block of surface.querySelectorAll<HTMLElement>('[data-type="code-block"]')) {
@@ -86,6 +99,20 @@ export function installCodeBlocks(editor: any, options: {
       bar.style.width = `${Math.max(0, rect.width - 16)}px`;
       bar.hidden = rect.bottom < origin.top || rect.top > origin.bottom;
       const language = languageOf(source), select = bar.querySelector<HTMLSelectElement>('.vm-code-language')!;
+      const graph = language === 'markmap' && block.querySelector<HTMLElement>(':scope > :is(.vditor-ir__preview,.vditor-wysiwyg__preview) > div.language-markmap:has(> svg)');
+      if (graph) {
+        let resize = resizers.get(block);
+        if (!resize || resize.graph !== graph || resize.source !== source) {
+          resize?.handle.remove();
+          resize = createMarkmapResize(graph, source, options.submit);
+          resizers.set(block, resize);
+          layer.append(resize.handle);
+        }
+        const bounds = graph.getBoundingClientRect();
+        const bottom = bounds.bottom - origin.top;
+        resize.handle.style.transform = `translate(${bounds.left - origin.left + bounds.width / 2 - 24}px,${bottom}px)`;
+        resize.handle.hidden = !bounds.height || bottom < 0 || bottom > origin.height - 12;
+      }
       const all = [...new Set([...languages, ...((window as any).hljs?.listLanguages() || []), language])];
       const choices = all.map(value => `<option value="${esc(value)}">${esc(value || '纯文本')}</option>`).join('');
       if (select.dataset.choices !== choices) { select.innerHTML = choices; select.dataset.choices = choices; }

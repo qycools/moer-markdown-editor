@@ -11,7 +11,7 @@ const lessPlugin = { name: 'less', setup(b) { b.onLoad({ filter: /\.less$/ }, as
 }); } };
 const common = { bundle: true, sourcemap: false, logLevel: 'warning' };
 await build({ ...common, entryPoints: ['src/extension.ts'], outfile: 'dist/extension.js', platform: 'node', target: 'node20', format: 'cjs', external: ['vscode', 'playwright-core'] });
-await build({ ...common, entryPoints: { webview: 'src/webview/main.ts', renderer: 'src/renderer.ts' }, outdir: 'dist', platform: 'browser', target: 'chrome124', format: 'iife', define: { VDITOR_VERSION: '"4.0.1"' }, alias: { '@local/vditor': path.join(root, 'vditor-master/src/index.ts'), '@local/mode': path.join(root, 'vditor-master/src/ts/toolbar/EditMode.ts'), '@local/code': path.join(root, 'vditor-master/src/ts/util/processCode.ts'), '@local/blockTools': path.join(root, 'vditor-master/src/ts/wysiwyg/highlightToolbarWYSIWYG.ts') }, loader: { '.png': 'dataurl', '.svg': 'text' }, plugins: [lessPlugin] });
+await build({ ...common, entryPoints: { webview: 'src/webview/main.ts', renderer: 'src/renderer.ts' }, outdir: 'dist', platform: 'browser', target: 'chrome124', format: 'iife', define: { VDITOR_VERSION: '"4.0.1"' }, alias: { '@local/vditor': path.join(root, 'vditor-master/src/index.ts'), '@local/mode': path.join(root, 'vditor-master/src/ts/toolbar/EditMode.ts'), '@local/code': path.join(root, 'vditor-master/src/ts/util/processCode.ts') }, loader: { '.png': 'dataurl', '.svg': 'text' }, plugins: [lessPlugin] });
 for (const folder of ['js', 'css', 'images']) await cp(path.join(root, 'vditor-master/src', folder), path.join(root, 'media/vditor/dist', folder), { recursive: true });
 await cp('vditor-master/LICENSE', 'media/vditor/LICENSE');
 await mkdir('media/codicons', { recursive: true });

@@ -18,8 +18,9 @@ for (const [before, after] of [['abc', 'axc'], ['', '新文档'], ['a😀b', 'a�
 }
 assert.throws(() => validateExport({ ...exportDefaults, fontSize: 0 }));
 assert.throws(() => validateExport({ ...exportDefaults, topMargin: Infinity }));
-assert.equal(actions.length, 24);
-console.log('PASS document diff, export validation, 24 toolbar actions');
+assert.equal(actions[0][0], 'outline');
+assert.equal(actions[1][0], 'mindmap');
+console.log('PASS document diff, export validation, and toolbar actions');
 const fixture = await readFile('test/fixtures/sample.md', 'utf8');
 const browser = await chromium.launch({ executablePath: await findBrowser(), headless: true, args: ['--allow-file-access-from-files'] });
 const errors = [];
@@ -38,7 +39,7 @@ try {
   await page.goto(pathToFileURL(path.resolve('.test-results/frontend.html')).href);
   await page.waitForFunction(() => window.VM_APP?.ready && document.querySelector('#outline button'), { timeout: 20000 });
   await page.waitForFunction(() => document.querySelector('.vditor-ir .language-math .katex') || document.querySelector('.vditor-ir .katex'), { timeout: 20000 });
-  assert.equal(await page.locator('#toolbar [data-action]').count(), 24);
+  assert.equal(await page.locator('#toolbar [data-action]').count(), actions.length);
   assert.equal(await page.evaluate(() => window.VM_MESSAGES.filter(m => m.type === 'edit').length), 0, 'Opening must not dirty the file');
   const colored = page.locator('.vditor-ir [data-vm-color]').filter({ hasText: '红色文字' });
   assert.equal(await colored.evaluate(e => getComputedStyle(e).color), 'rgb(229, 57, 53)');
@@ -132,14 +133,103 @@ try {
   await checkLayoutUI(page, text => page.evaluate(text => {window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,700);},text), {read: () => page.evaluate(() => window.VM_CLIPBOARD || '')});
   await build({ entryPoints: ['test/clipboardChecks.ts'], outfile: 'dist/clipboard-checks.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
   await (await import('../dist/clipboard-checks.mjs?test=' + Date.now())).checkClipboardItems(page);
+  const longParagraph = '可阅读的段落摘录内容'.repeat(12);
+  const mapDocument = [
+    '# Root & scope', '', 'Intro paragraph.', '', '[TOC]', '', '## Branch one', '',
+    '- Main item', '  - Child item', '', '- [x] Done task', '- [ ] Pending task', '',
+    '#### Nested branch', '', '1. Ordered item', '', '## Branch two', '', longParagraph, '',
+    '```text', 'Excluded code', '```', '', '| Excluded table |', '| --- |', '| Cell |', '',
+  ].join('\n');
+  await page.evaluate(text => { window.VM_DOCUMENT = text; window.VM_APP.applyDocument(text, 710); }, mapDocument);
+  await page.context().setOffline(true);
+  await page.locator('#toolbar [data-action=outline] + [data-action=mindmap]').click();
+  const map = page.locator('#mindmap-preview svg');
+  const compact = page.locator('[data-map-mode=compact]');
+  const detailed = page.locator('[data-map-mode=detailed]');
+  await map.getByText('Nested branch', { exact: true }).waitFor({ state: 'attached' });
+  assert.equal(await compact.getAttribute('aria-pressed'), 'true');
+  assert.equal(await map.locator('.markmap-node').count(), 5);
+  assert.match(await map.textContent(), /Root & scope/);
+  await page.evaluate(() => {
+    for (const mode of ['detailed', 'compact', 'detailed']) document.querySelector(`[data-map-mode=${mode}]`).click();
+  });
+  for (const name of ['Intro paragraph.', 'Main item', 'Child item', '✓ Done task', '□ Pending task', 'Ordered item', longParagraph.slice(0, 80) + '…']) {
+    await map.getByText(name, { exact: true }).waitFor({ state: 'attached' });
+  }
+  assert.equal(await detailed.getAttribute('aria-pressed'), 'true');
+  assert.equal(await map.locator('.markmap-node').count(), 12);
+  await compact.click();
+  await map.getByText('Nested branch', { exact: true }).waitFor({ state: 'attached' });
+  assert.equal(await map.locator('.markmap-node').count(), 5);
+  assert.equal(await page.evaluate(() => window.VM_DOCUMENT), mapDocument);
+  await detailed.click();
+  const waitForMapExport = async format => {
+    const message = await page.waitForFunction(format => window.VM_MESSAGES.find(message => message.type === 'exportMindmap' && message.format === format), format);
+    return message.jsonValue();
+  };
+  await page.locator('[data-mindmap-export=md]').click();
+  const markdownExport = await waitForMapExport('md');
+  assert.ok(markdownExport.detailed);
+  assert.match(markdownExport.text, /^```markmap\n/);
+  assert.match(markdownExport.text, /Child item/);
+  await page.locator('[data-mindmap-export=svg]').click();
+  const svgExport = await waitForMapExport('svg');
+  const svgFile = path.resolve('.test-results/mindmap.svg');
+  await writeFile(svgFile, svgExport.text);
+  const exportedPage = await browser.newPage();
+  await exportedPage.context().setOffline(true);
+  await exportedPage.goto(pathToFileURL(svgFile).href);
+  assert.equal(await exportedPage.locator('parsererror').count(), 0);
+  assert.equal(await exportedPage.locator('svg .markmap-node').count(), 12);
+  assert.equal(await exportedPage.locator('svg > g').getAttribute('transform'), null);
+  await exportedPage.locator('svg').getByText('Child item', { exact: true }).waitFor();
+  await exportedPage.close();
+  await page.locator('#insert-mindmap').click();
+  await page.waitForFunction(() => window.VM_DOCUMENT.includes('```markmap'));
+  const insertedMap = (await page.evaluate(() => window.VM_DOCUMENT)).match(/```markmap\n([\s\S]+?)\n```/)[1];
+  assert.match(insertedMap, /- Root \\& scope\n {2}- Intro paragraph\\\.\n {2}- Branch one/);
+  assert.match(insertedMap, / {4}- Main item\n {6}- Child item/);
+  assert.match(insertedMap, / {4}- Nested branch\n {6}- Ordered item\n {2}- Branch two/);
+  assert.doesNotMatch(insertedMap, /Excluded code|Excluded table/);
+  const renderedMap = page.locator('.vditor-ir .language-markmap svg');
+  await renderedMap.getByText('Child item', { exact: true }).waitFor({ state: 'attached' });
+  await renderedMap.evaluate(svg => svg.scrollIntoView({ block: 'center' }));
+  const resize = page.locator('.vm-markmap-resize');
+  await resize.waitFor({ state: 'visible' });
+  assert.equal(await resize.count(), 1);
+  await resize.scrollIntoViewIfNeeded();
+  const handleBounds = await resize.boundingBox();
+  const x = handleBounds.x + handleBounds.width / 2, y = handleBounds.y + handleBounds.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x, y + 80, { steps: 5 });
+  await page.mouse.up();
+  await page.waitForFunction(() => window.VM_DOCUMENT.includes('moye-markmap-height: 440'));
+  const resized = await page.evaluate(() => window.VM_DOCUMENT);
+  await page.evaluate(text => window.VM_APP.applyDocument(text, 711), resized);
+  await renderedMap.waitFor({ state: 'attached' });
+  await renderedMap.evaluate(svg => svg.scrollIntoView({ block: 'center' }));
+  assert.equal(await renderedMap.evaluate(svg => svg.getBoundingClientRect().height), 440);
+  await resize.dblclick();
+  await page.waitForFunction(() => !window.VM_DOCUMENT.includes('moye-markmap-height'));
+  assert.equal(await renderedMap.evaluate(svg => svg.getBoundingClientRect().height), 360);
+  const withoutTitle = 'A standalone paragraph.\n\n- Standalone item\n';
+  await page.evaluate(text => { window.VM_DOCUMENT = text; window.VM_APP.applyDocument(text, 712); }, withoutTitle);
+  await page.locator('#toolbar [data-action=mindmap]').click();
+  await map.getByText('分支一', { exact: true }).waitFor({ state: 'attached' });
+  await detailed.click();
+  await map.getByText('Standalone item', { exact: true }).waitFor({ state: 'attached' });
+  assert.equal(await page.evaluate(() => window.VM_DOCUMENT), withoutTitle);
+  console.log('PASS offline mind maps, SVG and Markdown export, Markmap-only resizing, persistence and reset');
   assert.deepEqual(errors, []);
 } finally { await browser.close(); }
 
 const outputDir = path.resolve('.test-results/中文导出');
 await mkdir(outputDir, { recursive: true });
+const exportFixture = fixture + '\n\n<img alt="Sized image" src="sample.svg" width="120" height="40">\n';
 for (const format of ['html', 'pdf', 'docx']) {
   const options = { ...exportDefaults, format, beautify: true };
-  const result = await exportDocument({ root: process.cwd(), markdown: fixture, sourcePath: path.resolve('test/fixtures/sample.md'), outputPath: path.join(outputDir, `功能验收.${format}`), options, settings: defaults, dark: false, progress: text => console.log(`${format}: ${text}`) });
+  const result = await exportDocument({ root: process.cwd(), markdown: exportFixture, sourcePath: path.resolve('test/fixtures/sample.md'), outputPath: path.join(outputDir, `功能验收.${format}`), options, settings: defaults, dark: false, progress: text => console.log(`${format}: ${text}`) });
   assert.ok(result.bytes > 1000);
   console.log(`PASS ${format.toUpperCase()} (${result.bytes} bytes)`);
 }
@@ -147,7 +237,7 @@ const diagrams = await readFile('test/fixtures/diagrams.md','utf8');
 await exportDocument({ root: process.cwd(), markdown: diagrams, sourcePath: path.resolve('test/fixtures/diagrams.md'), outputPath: path.join(outputDir, 'diagrams.html'), options: {...exportDefaults,format:'html'}, settings: defaults, dark:false, progress: text => console.log('diagrams: '+text) });
 console.log('PASS additional diagram renderers');
 const offline=await chromium.launch({executablePath:await findBrowser(),headless:true});
-try{const p=await offline.newPage();await p.context().setOffline(true);await p.goto(pathToFileURL(path.join(outputDir,'功能验收.html')).href);assert.ok(await p.locator('.katex').count()>0);assert.ok(await p.locator('.language-mermaid svg').count()>0);assert.equal(await p.locator('img').evaluateAll(imgs=>imgs.every(img=>img.complete&&img.naturalWidth>0)),true);await p.screenshot({path:'.test-results/html-offline.png',fullPage:true});}finally{await offline.close();}
+try{const p=await offline.newPage();await p.context().setOffline(true);await p.goto(pathToFileURL(path.join(outputDir,'功能验收.html')).href);assert.ok(await p.locator('.katex').count()>0);assert.ok(await p.locator('.language-mermaid svg').count()>0);assert.equal(await p.locator('img').evaluateAll(imgs=>imgs.every(img=>img.complete&&img.naturalWidth>0)),true);assert.equal(await p.locator('img[alt="Sized image"]').getAttribute('width'),'120');assert.equal(await p.locator('img[alt="Sized image"]').getAttribute('height'),'40');await p.screenshot({path:'.test-results/html-offline.png',fullPage:true});}finally{await offline.close();}
 console.log('PASS standalone HTML with networking disabled');
 await assert.rejects(findBrowser('C:/missing-browser.exe'), /浏览器不存在/);
 const abort = new AbortController(); abort.abort();

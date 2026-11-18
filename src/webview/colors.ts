@@ -65,14 +65,11 @@ export function editTextStyles(target: HTMLElement, changes: TextStyles, lute: a
   highest.replaceWith(...container.childNodes);
   return middle;
 }
-export function undecorate(html: string): string {
-  const root = document.createElement('div'); root.innerHTML = html;
+export function undecorateColors(root: ParentNode) {
   for (const span of [...root.querySelectorAll('[data-vm-color]')].reverse()) span.replaceWith(...span.childNodes);
   for (const token of root.querySelectorAll('.vm-color-token')) token.classList.remove('vm-color-token');
-  return root.innerHTML;
 }
-export function decorate(html: string): string {
-  const root = document.createElement('div'); root.innerHTML = html;
+export function decorateColors(root: ParentNode) {
   for (const block of root.querySelectorAll('p,h1,h2,h3,h4,h5,h6,li,td,th,blockquote')) {
     const stack: { token: Element; style: string | undefined }[] = [];
     for (const token of [...block.querySelectorAll('[data-type="html-inline"]')]) {
@@ -89,18 +86,5 @@ export function decorate(html: string): string {
         start.token.classList.add('vm-color-token'); token.classList.add('vm-color-token');
       }
     }
-  }
-  return root.innerHTML;
-}
-export function installColorAdapter(lute: any) {
-  const produced = ['Md2VditorDOM', 'Md2VditorIRDOM', 'HTML2VditorDOM', 'HTML2VditorIRDOM', 'SpinVditorDOM', 'SpinVditorIRDOM'];
-  const consumed = ['SpinVditorDOM', 'SpinVditorIRDOM', 'VditorDOM2Md', 'VditorIRDOM2Md', 'VditorDOM2HTML', 'VditorIRDOM2HTML'];
-  for (const name of new Set([...produced, ...consumed])) {
-    if (typeof lute[name] !== 'function') continue;
-    const original = lute[name].bind(lute);
-    lute[name] = (value: string, ...rest: any[]) => {
-      const output = original(consumed.includes(name) ? undecorate(value) : value, ...rest);
-      return produced.includes(name) ? decorate(output) : output;
-    };
   }
 }

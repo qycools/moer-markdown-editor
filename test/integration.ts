@@ -8,7 +8,8 @@ import { checkThemeUI } from './themeChecks';
 import { checkNativeColors } from './nativeColorChecks';
 import { checkLayoutUI } from './layoutChecks';
 import { checkColorUI } from './colorChecks';
-import { EXTENSION_ID } from '../src/shared';
+import { checkContentTools } from './contentChecks';
+import { actions, EXTENSION_ID } from '../src/shared';
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check: () => boolean | Promise<boolean>, label: string, timeout = 15000) {
@@ -34,7 +35,7 @@ export async function run() {
     let frame: Frame | undefined;
     await until(async () => {
       for (const page of browser.contexts().flatMap(context => context.pages())) for (const candidate of page.frames()) {
-        try { if (await candidate.locator('#toolbar [data-action]').count() === 24) { frame = candidate; return true; } } catch { /* Webview navigation can detach a frame. */ }
+        try { if (await candidate.locator('#toolbar [data-action]').count() === actions.length) { frame = candidate; return true; } } catch { /* Webview navigation can detach a frame. */ }
       }
       return false;
     }, 'VS Code webview toolbar');
@@ -118,6 +119,12 @@ export async function run() {
     await frame!.locator('.vditor-ir [data-vm-color] strong').click(); await frame!.locator('#annotation-clear').click(); await until(()=>!document.getText().includes('color:'),'Eraser reaches TextDocument');
     await vscode.commands.executeCommand('vditorMarkdown.undo'); await until(()=>document.getText()===annotationBefore,'Undo eraser');
     await vscode.commands.executeCommand('vditorMarkdown.redo'); await until(()=>!document.getText().includes('color:'),'Redo eraser');
+    await checkContentTools(frame!, replaceDocument, folder, async () => await vscode.env.clipboard.readText(), async text => {
+      await until(() => document.getText() === text, 'Image dimensions and table edits reach TextDocument');
+      await vscode.commands.executeCommand('vditorMarkdown.save');
+      await until(() => !document.isDirty, 'Save image dimensions and table layout');
+      assert.equal(await readFile(filename, 'utf8'), text);
+    });
     await checkLayoutUI(frame!,replaceDocument,{read:async()=>await vscode.env.clipboard.readText()});
     await vscode.commands.executeCommand('vditorMarkdown.save'); await until(()=>!document.isDirty,'Save before paragraph controls');
     const blocksBefore=document.getText();
@@ -128,6 +135,46 @@ export async function run() {
     await vscode.commands.executeCommand('vditorMarkdown.redo'); await until(()=>!document.getText().includes('First paragraph'),'Redo paragraph deletion');
     await vscode.commands.executeCommand('vditorMarkdown.undo'); await until(()=>document.getText()===blocksBefore,'Restore paragraph');
     await vscode.commands.executeCommand('vditorMarkdown.save'); await until(()=>!document.isDirty,'Save paragraph edits');
+    const mindmapButton = frame!.locator('#toolbar [data-action=outline] + [data-action=mindmap]');
+    await mindmapButton.click();
+    const map = frame!.locator('#mindmap-preview svg');
+    await map.getByText('Block controls', { exact: true }).waitFor({ state: 'attached' });
+    const detail = 'First paragraph bold.';
+    assert.equal(await map.getByText(detail, { exact: true }).count(), 0);
+    await frame!.locator('[data-map-mode=detailed]').click();
+    await map.getByText(detail, { exact: true }).waitFor({ state: 'attached' });
+    const simpleDialog = vscode.workspace.getConfiguration('files.simpleDialog');
+    const previousDialogSetting = simpleDialog.inspect<boolean>('enable')?.globalValue;
+    await simpleDialog.update('enable', true, vscode.ConfigurationTarget.Global);
+    try {
+      const picker = page.locator('.quick-input-widget input[type=text]:visible');
+      for (const format of ['md', 'svg']) {
+        const exported = path.join(folder, `mindmap-${Date.now()}.${format}`);
+        await frame!.locator(`[data-mindmap-export=${format}]`).click();
+        await picker.waitFor({ state: 'visible' });
+        await picker.fill(exported);
+        await picker.press('Enter');
+        await until(async () => {
+          try {
+            const contents = await readFile(exported, 'utf8');
+            return contents.includes(format === 'md' ? 'First paragraph bold\\.' : detail);
+          } catch { return false; }
+        }, `The VS Code save dialog writes the ${format} mind map`);
+      }
+    } finally {
+      await simpleDialog.update('enable', previousDialogSetting, vscode.ConfigurationTarget.Global);
+    }
+    assert.equal(document.getText(), blocksBefore, 'Mind map preview and exports leave the document text intact');
+    await frame!.locator('#insert-mindmap').click();
+    const embeddedMap = frame!.locator('.vditor-ir .language-markmap svg');
+    await embeddedMap.waitFor({ state: 'visible' });
+    await embeddedMap.evaluate(svg => svg.scrollIntoView({ block: 'center' }));
+    await frame!.locator('.vm-markmap-resize').press('ArrowDown');
+    await until(() => document.getText().includes('moye-markmap-height: 384'), 'Markmap height reaches the document');
+    await vscode.commands.executeCommand('vditorMarkdown.save');
+    await until(() => !document.isDirty, 'Save Markmap height');
+    assert.match(await readFile(filename, 'utf8'), /moye-markmap-height: 384/);
+    console.log('PASS both mind map formats through VS Code save dialogs and Markmap height saved to disk');
     await vscode.commands.executeCommand('vditorMarkdown.source');
     await until(() => vscode.window.activeTextEditor?.document.uri.toString() === document.uri.toString(), 'Source command opens the same document');
     assert.match(vscode.window.activeTextEditor!.document.getText(), /Block controls/);

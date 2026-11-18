@@ -1,3 +1,5 @@
+import { stripImageFallbacks } from './contentMarkup';
+
 export function installStructures(editor: any, submit: () => void) {
   let scheduled = false;
   const roots = () => ['ir', 'wysiwyg'].map(mode => editor.vditor[mode].element as HTMLElement);
@@ -27,6 +29,7 @@ export function installStructures(editor: any, submit: () => void) {
       event.stopImmediatePropagation();
       const block = structure.closest('[data-type="html-block"]')!, source = block.querySelector('pre>code')!;
       const copy = structure.cloneNode(true) as HTMLElement;
+      stripImageFallbacks(copy);
       copy.classList.remove('vm-structure'); if (!copy.className) copy.removeAttribute('class');
       copy.removeAttribute('contenteditable');
       copy.querySelectorAll('[data-vm-editable]').forEach(node => { node.removeAttribute('data-vm-editable'); node.removeAttribute('contenteditable'); });

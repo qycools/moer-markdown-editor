@@ -2,7 +2,7 @@
   "name": "moye-markdown",
   "displayName": "墨尔 markdown editor",
   "description": "支持可视化编辑、颜色排版、公式图表与 PDF / HTML / Word 导出的 Markdown 编辑器。",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "publisher": "qycools",
   "license": "MIT",
   "engines": {
@@ -59,6 +59,11 @@
       {
         "command": "vditorMarkdown.outline",
         "title": "墨尔 markdown editor: 大纲",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.mindmap",
+        "title": "墨尔 markdown editor: 思维导图",
         "enablement": "activeCustomEditorId == vditorMarkdown.editor"
       },
       {

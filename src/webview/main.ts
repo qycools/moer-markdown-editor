@@ -2,7 +2,7 @@ import Vditor from '@local/vditor';
 import { setEditMode } from '@local/mode';
 import { processCodeRender } from '@local/code';
 import { actions, defaults, defaultColors, escapeHTML as esc, exportDefaults, pageWidths, pageWidthPixels, validPageWidth, validPalette, type ColorProperty, type Action, type ExportOptions, type Settings, type ThemeCatalog } from '../shared';
-import { editTextStyles, installColorAdapter } from './colors';
+import { editTextStyles } from './colors';
 import { icon } from './icons';
 import { installCodeBlocks } from './codeBlocks';
 import { installThemeMenu, isDarkTheme, themeSelectOptions } from './themes';
@@ -12,8 +12,13 @@ import { installBlockMenus } from './blocks';
 import { installStructures } from './structures';
 import { installColorMenus } from './colorMenus';
 import { installToolbarState } from './toolbarState';
+import { installContentAdapter, templateFor } from './contentMarkup';
+import { installContentTools } from './contentTools';
+import { installLocalImageFallback } from './imageTools';
+import { buildMindmap, headingSelector, mindmapSvg } from './mindmap';
 import './style.css';
 import './tables.css';
+import './contentTools.css';
 
 const boot = window.VM_BOOT;
 const bridge = window.acquireVsCodeApi?.() || { postMessage: (message: any) => console.log('bridge', message), getState: () => ({}), setState: () => {} };
@@ -27,6 +32,8 @@ let blockMenus: ReturnType<typeof installBlockMenus> | undefined;
 let structures: ReturnType<typeof installStructures> | undefined;
 let colorMenus: ReturnType<typeof installColorMenus> | undefined;
 let toolbarState: ReturnType<typeof installToolbarState> | undefined;
+let contentTools: ReturnType<typeof installContentTools> | undefined;
+let mindmapPreview: AbortController | undefined;
 let toastTimer = 0;
 let savedRange: Range | undefined, savedTextarea: [number, number] | undefined, previousFocus: HTMLElement | null = null;
 let exportOptions: ExportOptions = { ...exportDefaults }, searchIndex = -1;
@@ -38,10 +45,11 @@ const status = document.getElementById('status')!;
 status.hidden = true;
 const base = document.createElement('base'); base.href = boot.base; document.head.append(base);
 const toolbar = document.createElement('div'); toolbar.id = 'toolbar'; toolbar.setAttribute('role', 'toolbar'); toolbar.setAttribute('aria-label', 'Markdown 编辑工具栏');
-const separators = new Set([0, 2, 7, 10, 12, 16, 18, 20]);
-toolbar.innerHTML = `<div id="toolbar-controls">${actions.map(([id, label], i) => `<button type="button" data-action="${id}" title="${label}" aria-label="${label}">${icon(id)}</button>${separators.has(i) ? '<span class="separator" role="separator"></span>' : ''}`).join('')}</div>`;
+const separators = new Set<Action>(['mindmap', 'save', 'link', 'export', 'brightness', 'table', 'code', 'redo']);
+toolbar.innerHTML = `<div id="toolbar-controls">${actions.map(([id, label]) => `<button type="button" data-action="${id}" title="${label}" aria-label="${label}">${icon(id)}</button>${separators.has(id) ? '<span class="separator" role="separator"></span>' : ''}`).join('')}</div>`;
 document.getElementById('app')!.prepend(toolbar);
 const nativeTools = ['headings', 'bold', 'italic', 'strike', 'link', 'list', 'ordered-list', 'check', 'table', 'quote', 'code', 'undo', 'redo', 'emoji', 'line', 'inline-code', 'outdent', 'indent', 'preview', 'code-theme', 'content-theme'];
+toolbar.querySelector('[data-action=mindmap]')!.setAttribute('aria-haspopup', 'dialog');
 toolbar.querySelector('[data-action=theme]')!.setAttribute('aria-haspopup', 'menu');
 const themeMenu = installThemeMenu({ catalog: () => catalog, current: target => catalog.themes.some(theme => theme.id === settings[target]) ? settings[target] : 'auto', choose: (target, id) => { void changeSetting(target, id); }, beforeOpen: () => { if (overlay.querySelector('#settings-menu')) closeDialog(false); colorMenus?.close(); blockMenus?.close(); rememberSelection(); selectionColors?.hide(); } });
 
@@ -66,7 +74,7 @@ function submit() {
   updateStatus(); updateOutline();
 }
 function applyDocument(text: string, nextVersion: number) {
-  selectionColors?.hide(); themeMenu.close(); blockMenus?.close(); colorMenus?.close();
+  selectionColors?.hide(); themeMenu.close(); blockMenus?.close(); colorMenus?.close(); contentTools?.close();
   eol = text.includes('\r\n') ? '\r\n' : '\n';
   const surface = getSurface(); const scrollTop = surface?.scrollTop || 0;
   suppress = true;
@@ -137,6 +145,7 @@ function applySettings() {
   outlineResize?.update();
   toolbar.querySelector('[data-action="outline"]')?.setAttribute('aria-pressed', String(settings.outline));
   if (editor.vditor.currentMode !== settings.mode) {
+    contentTools?.close();
     submit(); const text = editor.getValue(); suppress = true;
     setEditMode(editor.vditor, settings.mode, text); baseline = getValue(); suppress = false;
     updateOutline(); updateStatus();
@@ -144,8 +153,77 @@ function applySettings() {
   codeBlocks?.refresh(); blockMenus?.refresh(); structures?.refresh(); selectionColors?.refresh(); colorMenus?.refresh(); toolbarState?.refresh();
 }
 function headings() {
-  const root = document.createElement('div'); root.innerHTML = editor.vditor.lute.Md2HTML(editor.getValue());
-  return [...root.querySelectorAll('h1,h2,h3,h4,h5,h6')];
+  const root = templateFor(editor.vditor.lute.Md2HTML(editor.getValue())).content;
+  return [...root.querySelectorAll(headingSelector)];
+}
+function showMindmap() {
+  const root = templateFor(editor.vditor.lute.Md2HTML(editor.getValue())).content;
+  showDialog('思维导图', `<div class="mindmap-modes" role="group" aria-label="导图详细程度">
+    <button type="button" data-map-mode="compact" aria-pressed="true">精简版</button>
+    <button type="button" data-map-mode="detailed" aria-pressed="false">详细版</button>
+  </div><p id="mindmap-note" class="muted" role="status"></p><div id="mindmap-preview"></div>`,
+  '<button type="button" data-mindmap-export="md">导出 Markdown</button><button type="button" data-mindmap-export="svg">导出 SVG</button><button type="button" id="insert-mindmap" class="primary">插入到正文</button>', true);
+  const preview = overlay.querySelector<HTMLElement>('#mindmap-preview')!;
+  const note = overlay.querySelector<HTMLElement>('#mindmap-note')!;
+  const modes = [...overlay.querySelectorAll<HTMLButtonElement>('[data-map-mode]')];
+  let detailed = false;
+  let markdown = '';
+  const fencedMap = () => '```markmap\n' + markdown + '\n```\n';
+  function render() {
+    mindmapPreview?.abort();
+    mindmapPreview = new AbortController();
+    const map = buildMindmap(root, boot.filename, detailed);
+    markdown = map.markdown;
+    note.textContent = map.example
+      ? detailed ? '当前文档没有可生成导图的内容，以下为示例。' : '当前文档没有标题，以下为示例。'
+      : detailed ? '标题、列表和正文段落摘录' : '文档标题';
+    for (const button of modes) button.setAttribute('aria-pressed', String((button.dataset.mapMode === 'detailed') === detailed));
+    const graph = document.createElement('div');
+    const code = document.createElement('code');
+    code.className = 'language-markmap';
+    code.textContent = markdown;
+    graph.append(code);
+    preview.replaceChildren(graph);
+    Vditor.markmapRender(graph, boot.cdn, mindmapPreview.signal);
+  }
+  for (const button of modes) button.onclick = () => {
+    const next = button.dataset.mapMode === 'detailed';
+    if (next === detailed) return;
+    detailed = next;
+    render();
+  };
+  render();
+  const exportButtons = [...overlay.querySelectorAll<HTMLButtonElement>('[data-mindmap-export]')];
+  for (const button of exportButtons) button.onclick = async () => {
+    exportButtons.forEach(control => { control.disabled = true; });
+    const format = button.dataset.mindmapExport;
+    const includeDetails = detailed;
+    try {
+      const text = format === 'svg' ? await mindmapSvg(markdown, (canvas, signal) => Vditor.markmapRender(canvas, boot.cdn, signal)) : fencedMap();
+      const result = await rpc('exportMindmap', { format, text, detailed: includeDetails });
+      if (!result?.cancelled) toast('思维导图已导出');
+    } catch (error) {
+      toast((error as Error).message, true);
+    } finally {
+      exportButtons.forEach(control => { control.disabled = false; });
+    }
+  };
+  overlay.querySelector<HTMLButtonElement>('#insert-mindmap')!.onclick = () => {
+    closeDialog(false);
+    restoreSelection();
+    const surface = getSurface();
+    if (surface instanceof HTMLTextAreaElement) surface.setSelectionRange(surface.selectionEnd, surface.selectionEnd);
+    else if (window.getSelection()?.rangeCount) window.getSelection()!.collapseToEnd();
+    editor.insertMD('\n\n' + fencedMap() + '\n');
+    for (const block of surface?.querySelectorAll<HTMLElement>('[data-render="2"]:has(> .language-markmap)') || []) {
+      if (editor.vditor.currentMode === 'wysiwyg' && block.previousElementSibling instanceof HTMLElement) {
+        block.previousElementSibling.classList.add('vditor-wysiwyg__pre');
+        block.previousElementSibling.style.display = 'none';
+      }
+      processCodeRender(block, editor.vditor);
+    }
+    submit();
+  };
 }
 function updateOutline() {
   const outline = document.getElementById('outline'); if (!outline) return;
@@ -166,8 +244,13 @@ function navigateHeading(index: number) {
     }
   } else surface.querySelectorAll('h1,h2,h3,h4,h5,h6')[index]?.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
+function disposeMindmapPreview() {
+  mindmapPreview?.abort();
+  mindmapPreview = undefined;
+}
 function showDialog(title: string, body: string, footer = '', wide = false) {
-  themeMenu.close(); selectionColors?.hide(); blockMenus?.close(); colorMenus?.close();
+  disposeMindmapPreview();
+  themeMenu.close(); selectionColors?.hide(); blockMenus?.close(); colorMenus?.close(); contentTools?.close();
   rememberSelection(); previousFocus = document.activeElement as HTMLElement;
   overlay.innerHTML = `<div class="scrim"><section class="dialog${wide ? ' wide' : ''}" role="dialog" aria-modal="true" aria-labelledby="dialog-title"><header><h2 id="dialog-title">${title}</h2><button class="close" aria-label="关闭">×</button></header><div class="dialog-body">${body}</div>${footer ? `<footer>${footer}</footer>` : ''}</section></div>`;
   post('dialog', { open: true });
@@ -177,10 +260,12 @@ function showDialog(title: string, body: string, footer = '', wide = false) {
 }
 function closeDialog(restoreFocus: boolean | Event = true) {
   if (overlay.querySelector('[data-export-running]')) return;
+  disposeMindmapPreview();
   overlay.innerHTML = ''; toolbar.querySelector('[data-action=settings]')!.setAttribute('aria-expanded', 'false'); post('dialog', { open: false }); if (restoreFocus !== false) previousFocus?.focus();
 }
 function showSettingsMenu(body: string) {
-  themeMenu.close(); selectionColors?.hide(); blockMenus?.close(); colorMenus?.close(); rememberSelection(); previousFocus = document.activeElement as HTMLElement;
+  disposeMindmapPreview();
+  themeMenu.close(); selectionColors?.hide(); blockMenus?.close(); colorMenus?.close(); contentTools?.close(); rememberSelection(); previousFocus = document.activeElement as HTMLElement;
   const anchor = toolbar.querySelector<HTMLElement>('[data-action=settings]')!, rect = anchor.getBoundingClientRect();
   overlay.innerHTML = `<section id="settings-menu" class="settings-dropdown" role="region" aria-label="设置"><header><strong>设置</strong><button class="close" aria-label="关闭设置">×</button></header><div class="settings-body">${body}</div><footer><button id="reset-settings">恢复默认</button><button id="settings-done" class="primary">完成</button></footer></section>`;
   const menu = overlay.firstElementChild as HTMLElement;
@@ -390,8 +475,10 @@ async function uploadImages(files: File[]) {
 }
 function action(id: Action) {
   if (!initialized) return;
+  contentTools?.close();
   if (['save', 'source', 'undo', 'redo'].includes(id)) { submit(); post(id); return; }
   if (id === 'outline') { void changeSetting('outline', !settings.outline); return; }
+  if (id === 'mindmap') return showMindmap();
   if (id === 'headings') return showHeadingDialog();
   if (id === 'textColor' || id === 'backgroundColor') return colorMenus?.showPalette(toolbar.querySelector<HTMLElement>(`[data-action=${id}]`)!, id === 'textColor' ? 'color' : 'background-color');
   if (id === 'settings') return showSettings();
@@ -460,6 +547,7 @@ window.addEventListener('message', e => {
   else if (m.type === 'config') { settings = { ...defaults, ...m.settings, ...Object.fromEntries([...pendingSettings].map(([key, update]) => [key, update.value])) }; dark = m.dark; catalog = { themes: m.themes || catalog.themes, activeTheme: m.activeTheme || catalog.activeTheme }; exportOptions = { ...exportDefaults, ...m.exportDefaults }; applySettings(); }
 });
 applySettings();
+installLocalImageFallback(document.getElementById('editor')!, source => rpc('localImage', { source }));
 editor = new Vditor('editor', {
   cdn: boot.cdn, lang: 'zh_CN', mode: settings.mode, height: '100%', cache: { enable: false },
   theme: document.documentElement.dataset.mode === 'dark' ? 'dark' : 'classic',
@@ -468,22 +556,25 @@ editor = new Vditor('editor', {
   preview: { maxWidth: 1200, delay: 200, math: { engine: 'KaTeX' }, markdown: { sanitize: true, toc: true, mark: true }, theme: { current: 'light', path: `${boot.cdn}/dist/css/content-theme` } },
   input: () => { submit(); },
   after: () => {
-    installColorAdapter(editor.vditor.lute);
+    installContentAdapter(editor.vditor.lute);
     toolbarState = installToolbarState(toolbar, editor.vditor.toolbar.element, overlay);
     codeBlocks = installCodeBlocks(editor, { openThemeMenu: anchor => themeMenu.show(anchor, 'codeTheme'), rpc, submit, toast });
     structures = installStructures(editor, submit);
-    blockMenus = installBlockMenus(editor, { submit, rpc, toast, beforeOpen: () => { closeDialog(false); themeMenu.close(); colorMenus?.close(); selectionColors?.hide(); }, menuState: open => post('dialog', { open }) });
+    const menuState = (open: boolean) => post('dialog', { open });
+    const closeMenus = () => { closeDialog(false); themeMenu.close(); colorMenus?.close(); selectionColors?.hide(); };
+    contentTools = installContentTools(editor, { surface: getSurface, submit, toast, menuState, copy: text => rpc('clipboardWrite', { text }), beforeOpen: () => { closeMenus(); blockMenus?.close(); } });
+    blockMenus = installBlockMenus(editor, { submit, rpc, toast, menuState, openProperties: contentTools.openForBlock, beforeOpen: () => { closeMenus(); contentTools?.close(); } });
     colorMenus = installColorMenus({ surface: getSurface, palette, changePalette: (property, colors) => { void changeSetting(property === 'color' ? 'textColors' : 'backgroundColors', colors); }, edit: (target, styles) => {
       try { const caret = editTextStyles(target, styles, editor.vditor.lute, editor.vditor.currentMode); for (const preview of caret.querySelectorAll<HTMLElement>('.vditor-ir__preview[data-render="2"]')) processCodeRender(preview, editor.vditor); const surface = getSurface()!; surface.focus({ preventScroll: true }); const range = document.createRange(); range.selectNodeContents(caret); range.collapse(false); getSelection()!.removeAllRanges(); getSelection()!.addRange(range); surface.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'formatFontColor' })); submit(); }
       catch (error) { toast((error as Error).message, true); }
-    }, blocked: () => !!overlay.childElementCount || themeMenu.isOpen() || !!blockMenus?.isOpen(), beforeOpen: () => { closeDialog(false); themeMenu.close(); blockMenus?.close(); selectionColors?.hide(); }, menuState: open => post('dialog', { open }) });
+    }, blocked: () => !!overlay.childElementCount || themeMenu.isOpen() || !!blockMenus?.isOpen(), beforeOpen: () => { closeDialog(false); themeMenu.close(); blockMenus?.close(); contentTools?.close(); selectionColors?.hide(); }, menuState });
     const outline = document.createElement('nav'); outline.id = 'outline'; outline.setAttribute('aria-label', '文档大纲');
     const divider = document.createElement('div'); divider.id = 'outline-resizer'; divider.tabIndex = 0; divider.setAttribute('role', 'separator'); divider.setAttribute('aria-label', '调整大纲宽度'); divider.setAttribute('aria-orientation', 'vertical');
     editor.vditor.element.querySelector('.vditor-content').prepend(outline, divider);
     outlineResize = installOutlineResize(outline, divider, { width: () => settings.outlineWidth, change: width => { void changeSetting('outlineWidth', width); } });
     outline.addEventListener('click', e => { const heading = (e.target as Element).closest<HTMLElement>('[data-heading]'); if (heading) navigateHeading(Number(heading.dataset.heading)); });
     initialized = true; baseline = getValue(); applySettings(); post('ready');
-    selectionColors = installSelectionColors({ surface: getSurface, palette, blocked: () => !!overlay.childElementCount || themeMenu.isOpen() || !!blockMenus?.isOpen() || !!colorMenus?.isOpen(), remember: rememberSelection, apply: setColor });
+    selectionColors = installSelectionColors({ surface: getSurface, palette, blocked: () => !!overlay.childElementCount || themeMenu.isOpen() || !!blockMenus?.isOpen() || !!colorMenus?.isOpen() || !!contentTools?.isOpen(), remember: rememberSelection, apply: setColor });
     window.VM_APP = { editor, action, getValue, applyDocument, submit, settings: () => settings, documentVersion: () => version, ready: true };
   },
 });
