@@ -109,4 +109,4 @@ npm run package
 
 依赖版本由 `package-lock.json` 固定。源码、修改后的 Vditor 源码、构建脚本和测试文件随仓库提供；安装包统一使用 `npm run package` 生成。开源许可见 `LICENSE` 和 `THIRD_PARTY_NOTICES.md`。
 
-macOS 适配来自 [Emeric53 的 PR #1](https://github.com/qycools/moer-markdown-editor/pull/1)，本版将其整合进完整的源码构建与测试工程。平台路径测试可在 Windows 执行，结果不代表 macOS 实机验收。
+macOS 适配来自 [Emeric53 的贡献](https://github.com/qycools/moer-markdown-editor/pull/1)，本版将其整合进完整的源码构建与测试工程。平台路径测试可在 Windows 执行，结果不代表 macOS 实机验收。
