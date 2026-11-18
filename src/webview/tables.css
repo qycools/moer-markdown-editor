@@ -1,0 +1,32 @@
+.vditor-reset table {
+  display: table !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  table-layout: fixed;
+  border-collapse: collapse;
+  background: var(--bg,#fff) !important;
+  color: var(--fg,#24292f) !important;
+}
+.vditor-reset table tr,
+.vditor-reset table tbody,
+.vditor-reset table thead {
+  background: transparent !important;
+  border: 0 !important;
+}
+.vditor-reset table :is(td, th) {
+  min-width: 0 !important;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  border: 1px solid var(--accent,#8b949e) !important;
+  padding: 11px 16px;
+  background: var(--bg,#fff) !important;
+  color: var(--fg,#24292f) !important;
+}
+.vditor-reset table th {
+  background: color-mix(in srgb, var(--fg,#24292f) 7%, var(--bg,#fff)) !important;
+  font-weight: 650;
+  text-align: center;
+}
+.vditor-reset :is(h1, h2, h3, h4, h5, h6) {
+  border-bottom: 0 !important;
+}

@@ -1,0 +1,452 @@
+{
+  "name": "moye-markdown",
+  "displayName": "墨尔 markdown editor",
+  "description": "支持可视化编辑、颜色排版、公式图表与 PDF / HTML / Word 导出的 Markdown 编辑器。",
+  "version": "0.1.8",
+  "publisher": "qycools",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other",
+    "Formatters"
+  ],
+  "keywords": [
+    "markdown",
+    "vditor",
+    "wysiwyg",
+    "pdf",
+    "docx",
+    "moer"
+  ],
+  "main": "./dist/extension.js",
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onCustomEditor:vditorMarkdown.editor"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "不受信任的工作区中可阅读和编辑，禁用本机浏览器导出和图片写入。"
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "vditorMarkdown.editor",
+        "displayName": "墨尔 markdown editor",
+        "selector": [
+          {
+            "filenamePattern": "*.md"
+          },
+          {
+            "filenamePattern": "*.markdown"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "vditorMarkdown.open",
+        "title": "墨尔 markdown editor: 打开可视化编辑器",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "vditorMarkdown.outline",
+        "title": "墨尔 markdown editor: 大纲",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.source",
+        "title": "墨尔 markdown editor: 在 VS Code 中编辑",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.save",
+        "title": "墨尔 markdown editor: 保存",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.headings",
+        "title": "墨尔 markdown editor: 标题",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.bold",
+        "title": "墨尔 markdown editor: 粗体",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.italic",
+        "title": "墨尔 markdown editor: 斜体",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.strike",
+        "title": "墨尔 markdown editor: 删除线",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.link",
+        "title": "墨尔 markdown editor: 链接",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.textColor",
+        "title": "墨尔 markdown editor: 设置字体配色",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.backgroundColor",
+        "title": "墨尔 markdown editor: 设置背景配色",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.export",
+        "title": "墨尔 markdown editor: 导出",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.theme",
+        "title": "墨尔 markdown editor: 选择主题",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.brightness",
+        "title": "墨尔 markdown editor: 切换明暗主题",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.list",
+        "title": "墨尔 markdown editor: 无序列表",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.ordered-list",
+        "title": "墨尔 markdown editor: 有序列表",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.check",
+        "title": "墨尔 markdown editor: 任务列表",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.table",
+        "title": "墨尔 markdown editor: 表格",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.quote",
+        "title": "墨尔 markdown editor: 引用",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.code",
+        "title": "墨尔 markdown editor: 代码块",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.undo",
+        "title": "墨尔 markdown editor: 撤销",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.redo",
+        "title": "墨尔 markdown editor: 重做",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.search",
+        "title": "墨尔 markdown editor: 搜索",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.shortcuts",
+        "title": "墨尔 markdown editor: 快捷键配置",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.settings",
+        "title": "墨尔 markdown editor: 设置",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "vditorMarkdown.save",
+        "key": "ctrl+s",
+        "mac": "cmd+s",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen"
+      },
+      {
+        "command": "vditorMarkdown.undo",
+        "key": "ctrl+z",
+        "mac": "cmd+z",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen"
+      },
+      {
+        "command": "vditorMarkdown.redo",
+        "key": "ctrl+y",
+        "mac": "cmd+shift+z",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen"
+      },
+      {
+        "command": "vditorMarkdown.redo",
+        "key": "cmd+y",
+        "mac": "cmd+y",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen && isMac"
+      },
+      {
+        "command": "vditorMarkdown.bold",
+        "key": "ctrl+b",
+        "mac": "cmd+b",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen"
+      },
+      {
+        "command": "vditorMarkdown.italic",
+        "key": "ctrl+i",
+        "mac": "cmd+i",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen"
+      },
+      {
+        "command": "vditorMarkdown.strike",
+        "key": "alt+shift+5",
+        "mac": "alt+shift+5",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen"
+      },
+      {
+        "command": "vditorMarkdown.link",
+        "key": "ctrl+k",
+        "mac": "cmd+k",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen"
+      },
+      {
+        "command": "vditorMarkdown.search",
+        "key": "ctrl+f",
+        "mac": "cmd+f",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen"
+      },
+      {
+        "command": "vditorMarkdown.source",
+        "key": "ctrl+alt+m",
+        "mac": "cmd+alt+m",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen"
+      },
+      {
+        "command": "vditorMarkdown.export",
+        "key": "ctrl+alt+e",
+        "mac": "cmd+alt+e",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "vditorMarkdown.open",
+          "when": "resourceLangId == markdown",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "vditorMarkdown.open",
+          "when": "resourceExtname =~ /\\.(md|markdown)$/i",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "墨尔 markdown editor",
+      "properties": {
+        "vditorMarkdown.mode": {
+          "type": "string",
+          "enum": [
+            "ir",
+            "wysiwyg",
+            "sv"
+          ],
+          "default": "ir",
+          "description": "默认编辑模式：即时渲染、所见即所得或分屏预览。"
+        },
+        "vditorMarkdown.theme": {
+          "type": "string",
+          "default": "auto",
+          "description": "界面主题：auto 跟随 VS Code，或从工具栏选择已安装的颜色主题。"
+        },
+        "vditorMarkdown.colorMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "light",
+            "dark"
+          ],
+          "default": "auto",
+          "description": "明暗模式；auto 跟随 VS Code。",
+          "deprecationMessage": "请通过主题下拉菜单选择已安装主题，或使用明暗按钮切换。"
+        },
+        "vditorMarkdown.uiFontSize": {
+          "type": "number",
+          "default": 13,
+          "minimum": 10,
+          "maximum": 24
+        },
+        "vditorMarkdown.editorFontSize": {
+          "type": "number",
+          "default": 13,
+          "minimum": 10,
+          "maximum": 40
+        },
+        "vditorMarkdown.fontFamily": {
+          "type": "string",
+          "default": "",
+          "description": "正文字体；留空使用系统默认字体。"
+        },
+        "vditorMarkdown.boldColor": {
+          "type": "string",
+          "default": "",
+          "description": "粗体显示颜色；留空继承正文。"
+        },
+        "vditorMarkdown.pageWidth": {
+          "type": "string",
+          "default": "100%",
+          "pattern": "^(100%|[0-9]+(?:\\.[0-9]+)?(?:px|mm|in))$",
+          "description": "页面宽度：100% 随可用区域调整；px、mm、in 为固定宽度，超出时可横向滚动。"
+        },
+        "vditorMarkdown.lineHeight": {
+          "type": "number",
+          "default": 1.7,
+          "minimum": 1,
+          "maximum": 3
+        },
+        "vditorMarkdown.typewriterMode": {
+          "type": "boolean",
+          "default": false
+        },
+        "vditorMarkdown.codeFontFamily": {
+          "type": "string",
+          "default": ""
+        },
+        "vditorMarkdown.codeMaxHeight": {
+          "type": "string",
+          "enum": [
+            "none",
+            "240px",
+            "400px",
+            "60vh"
+          ],
+          "default": "none"
+        },
+        "vditorMarkdown.imageMaxWidth": {
+          "type": "number",
+          "default": 100,
+          "minimum": 10,
+          "maximum": 100
+        },
+        "vditorMarkdown.imageMaxHeight": {
+          "type": "number",
+          "default": 70,
+          "minimum": 10,
+          "maximum": 100
+        },
+        "vditorMarkdown.outline": {
+          "type": "boolean",
+          "default": true
+        },
+        "vditorMarkdown.browserPath": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "description": "导出用 Edge / Chrome 可执行文件路径；留空自动检测。"
+        },
+        "vditorMarkdown.exportDefaults": {
+          "type": "object",
+          "default": {},
+          "description": "上次使用的导出选项。"
+        },
+        "vditorMarkdown.codeTheme": {
+          "type": "string",
+          "default": "auto",
+          "description": "代码块主题：auto 跟随 VS Code，或从代码块下拉菜单选择已安装的颜色主题。"
+        },
+        "vditorMarkdown.outlineWidth": {
+          "type": "number",
+          "default": 216,
+          "minimum": 120,
+          "maximum": 1600,
+          "description": "文档大纲宽度（px）；也可拖动大纲右侧整条边缘调整。"
+        },
+        "vditorMarkdown.textColors": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "pattern": "^#[0-9a-fA-F]{6}$"
+          },
+          "default": [
+            "#ffd400",
+            "#ff6268",
+            "#62ad2e",
+            "#26a7df",
+            "#a68be3",
+            "#e46ae8",
+            "#f49a35",
+            "#aaaaaa"
+          ]
+        },
+        "vditorMarkdown.backgroundColors": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "pattern": "^#[0-9a-fA-F]{6}$"
+          },
+          "default": [
+            "#ffd400",
+            "#ff6268",
+            "#62ad2e",
+            "#26a7df",
+            "#a68be3",
+            "#e46ae8",
+            "#f49a35",
+            "#aaaaaa"
+          ]
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node --no-warnings scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/test.mjs",
+    "test:integration": "node scripts/integration.mjs",
+    "package": "node scripts/package.mjs",
+    "vscode:prepublish": "npm run build"
+  },
+  "dependencies": {
+    "diff-match-patch": "1.0.5",
+    "docx": "^9.5.1",
+    "json5": "^2.2.3",
+    "linkedom": "^0.18.12",
+    "playwright-core": "^1.56.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "1.95.0",
+    "@vscode/codicons": "^0.0.46-24",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.25.0",
+    "less": "^4.2.2",
+    "typescript": "^5.9.0"
+  },
+  "author": "qycools",
+  "icon": "media/brand/icon.png"
+}
