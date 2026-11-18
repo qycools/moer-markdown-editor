@@ -1,19 +1,35 @@
 # 更新记录
 
-## 0.1.8 (macOS 适配)
+## 0.1.9
 
-- 新增 macOS 桌面版 VS Code 适配：
-  - 补充 `Cmd+S`、`Cmd+Z`、`Cmd+Shift+Z` / `Cmd+Y`、`Cmd+B`、`Cmd+I`、`Option+Shift+5`、`Cmd+K`、`Cmd+F`、`Cmd+Option+M`、`Cmd+Option+E` 等 macOS 原生快捷键映射。
-  - 支持 macOS 自动检测 `/Applications` 与 `~/Applications` 中的 Chrome / Edge / Chromium / Brave，支持填写 `.app` 应用包路径及 `~` 家目录展开。
-  - 修复 macOS 原生编辑菜单 / `beforeinput` 撤销重做与 VS Code 文档状态不同步的问题，并增强剪贴板图片条目粘贴兼容性。
-  - 优化编辑界面、渲染导出与 DOCX 导出的 macOS 字体栈及中文字体选项（苹方、黑体、华文宋体、华文楷体、SF Mono、Menlo、Monaco）。
+- 整合 PR #1 的 macOS 适配：Cmd 快捷键、浏览器与 `.app` 检测、家目录路径展开及 macOS 字体。
+- 原生撤销/重做接入 VS Code 文档历史，图片粘贴兼容剪贴板文件条目。
+- 补齐完整源码、修改后的 Vditor 源码、依赖锁和测试工程，恢复跨平台构建与标准 VSIX 打包。
+- 在 README、第三方声明和发布说明中明确本项目是在 Vanessa219/vditor 开源代码基础上修改。
+
+Windows 回归与平台路径测试通过；本次未完成 macOS 实机验收。
 
 ## 0.1.8
 
-全新仓库首次发布。
+- 完整名称统一为“墨尔 markdown editor”，同步插件、命令、设置、导出创建者及发布材料。
+- GitHub 仓库更名为 `qycools/moer-markdown-editor`，扩展内部标识沿用原值以支持直接升级。
 
-- 即时渲染、所见即所得和分屏预览。
-- 大纲导航、段落操作、文字配色及独立代码主题。
-- 数学公式、图表以及 PDF、HTML、DOCX 导出。
+## 0.1.7
 
-适用范围为 Windows 与 macOS 本地桌面版 VS Code；导出需要本机 Edge 或 Chrome。
+- 名称由“墨页 Markdown”改为“墨尔 Markdown”，统一插件名称、命令、设置及导出文档中的创建者信息。
+- 沿用原扩展标识，支持从旧版本直接升级并保留配置、快捷键及编辑器关联。
+
+## 0.1.6
+
+- 修复即时渲染模式中链接文字过浅的问题，三种编辑模式均使用 VS Code 的链接专用配色。
+- 工具栏使用 VS Code 的图标、悬停、按下和选中配色，并跟随 VS Code 主题切换。
+
+## 0.1.5
+
+- 以“墨页 Markdown”品牌提供即时渲染、所见即所得和分屏预览。
+- 提供大纲、段落菜单、代码块操作、文字配色和页面宽度设置。
+- 页面和代码块支持选择已安装的 VS Code 颜色主题。
+- 支持公式、图表以及 PDF、HTML、DOCX 导出。
+- 改善亮色、暗色和高对比度主题下的工具栏状态显示，移除标题装饰横线。
+
+本版适用范围为 Windows 本地桌面版 VS Code；导出需要本机 Edge 或 Chrome。

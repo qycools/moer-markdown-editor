@@ -1,78 +1,38 @@
-declare const list_tree_default: string;
-declare const vscode_default: string;
-declare const save_default: string;
-declare const text_size_default: string;
-declare const bold_default: string;
-declare const italic_default: string;
-declare const strikethrough_default: string;
-declare const link_default: string;
-declare const symbol_color_default: string;
-declare const paintcan_default: string;
-declare const export_default: string;
-declare const color_mode_default: string;
-declare const lightbulb_default: string;
-declare const list_unordered_default: string;
-declare const list_ordered_default: string;
-declare const checklist_default: string;
-declare const table_default: string;
-declare const quote_default: string;
-declare const code_default: string;
-declare const discard_default: string;
-declare const redo_default: string;
-declare const search_default: string;
-declare const record_keys_default: string;
-declare const settings_gear_default: string;
-declare const copy_default: string;
-declare const clippy_default: string;
-declare const trash_default: string;
-declare const gripper_default: string;
-declare const screen_cut_default: string;
-declare const indent_default: string;
-declare const add_default: string;
-declare const sync_default: string;
-declare const split_horizontal_default: string;
-declare const fold_default: string;
+import outline from '@vscode/codicons/src/icons/list-tree.svg';
+import source from '@vscode/codicons/src/icons/vscode.svg';
+import save from '@vscode/codicons/src/icons/save.svg';
+import headings from '@vscode/codicons/src/icons/text-size.svg';
+import bold from '@vscode/codicons/src/icons/bold.svg';
+import italic from '@vscode/codicons/src/icons/italic.svg';
+import strike from '@vscode/codicons/src/icons/strikethrough.svg';
+import link from '@vscode/codicons/src/icons/link.svg';
+import textColor from '@vscode/codicons/src/icons/symbol-color.svg';
+import backgroundColor from '@vscode/codicons/src/icons/paintcan.svg';
+import exportIcon from '@vscode/codicons/src/icons/export.svg';
+import theme from '@vscode/codicons/src/icons/color-mode.svg';
+import brightness from '@vscode/codicons/src/icons/lightbulb.svg';
+import list from '@vscode/codicons/src/icons/list-unordered.svg';
+import orderedList from '@vscode/codicons/src/icons/list-ordered.svg';
+import check from '@vscode/codicons/src/icons/checklist.svg';
+import table from '@vscode/codicons/src/icons/table.svg';
+import quote from '@vscode/codicons/src/icons/quote.svg';
+import code from '@vscode/codicons/src/icons/code.svg';
+import undo from '@vscode/codicons/src/icons/discard.svg';
+import redo from '@vscode/codicons/src/icons/redo.svg';
+import search from '@vscode/codicons/src/icons/search.svg';
+import shortcuts from '@vscode/codicons/src/icons/record-keys.svg';
+import settings from '@vscode/codicons/src/icons/settings-gear.svg';
+import copy from '@vscode/codicons/src/icons/copy.svg';
+import paste from '@vscode/codicons/src/icons/clippy.svg';
+import trash from '@vscode/codicons/src/icons/trash.svg';
+import grip from '@vscode/codicons/src/icons/gripper.svg';
+import cut from '@vscode/codicons/src/icons/screen-cut.svg';
+import indent from '@vscode/codicons/src/icons/indent.svg';
+import add from '@vscode/codicons/src/icons/add.svg';
+import convert from '@vscode/codicons/src/icons/sync.svg';
+import columns from '@vscode/codicons/src/icons/split-horizontal.svg';
+import fold from '@vscode/codicons/src/icons/fold.svg';
+const eraser = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 5 5a2 2 0 0 1 0 3L11 21H6l-4-4a2 2 0 0 1 0-3L13 3a2 2 0 0 1 3 0Z"/><path d="m7 9 8 8M10 21h11"/></svg>';
 
-const eraser =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 5 5a2 2 0 0 1 0 3L11 21H6l-4-4a2 2 0 0 1 0-3L13 3a2 2 0 0 1 3 0Z"/><path d="m7 9 8 8M10 21h11"/></svg>';
-
-const icons: Record<string, string> = {
-  outline: list_tree_default,
-  source: vscode_default,
-  save: save_default,
-  headings: text_size_default,
-  bold: bold_default,
-  italic: italic_default,
-  strike: strikethrough_default,
-  link: link_default,
-  textColor: symbol_color_default,
-  backgroundColor: paintcan_default,
-  export: export_default,
-  theme: color_mode_default,
-  brightness: lightbulb_default,
-  list: list_unordered_default,
-  "ordered-list": list_ordered_default,
-  check: checklist_default,
-  table: table_default,
-  quote: quote_default,
-  code: code_default,
-  undo: discard_default,
-  redo: redo_default,
-  search: search_default,
-  shortcuts: record_keys_default,
-  settings: settings_gear_default,
-  copy: copy_default,
-  paste: clippy_default,
-  trash: trash_default,
-  grip: gripper_default,
-  cut: screen_cut_default,
-  indent: indent_default,
-  add: add_default,
-  convert: sync_default,
-  columns: split_horizontal_default,
-  fold: fold_default,
-  eraser
-};
-
-export const icon = (id: string) =>
-  (icons[id] || settings_gear_default).replace("<svg ", '<svg aria-hidden="true" focusable="false" ');
+const icons: Record<string, string> = { outline, source, save, headings, bold, italic, strike, link, textColor, backgroundColor, export: exportIcon, theme, brightness, list, 'ordered-list': orderedList, check, table, quote, code, undo, redo, search, shortcuts, settings, copy, paste, trash, grip, cut, indent, add, convert, columns, fold, eraser };
+export const icon = (id: string) => (icons[id] || settings).replace('<svg ', '<svg aria-hidden="true" focusable="false" ');

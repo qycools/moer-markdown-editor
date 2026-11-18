@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>settings</key><array>
+<dict><key>settings</key><dict><key>background</key><string>#272822</string><key>foreground</key><string>#f8f8f2</string></dict></dict>
+<dict><key>scope</key><string>keyword</string><key>settings</key><dict><key>foreground</key><string>#f92672</string></dict></dict>
+<dict><key>scope</key><string>string</string><key>settings</key><dict><key>foreground</key><string>#e6db74</string></dict></dict>
+</array></dict></plist>

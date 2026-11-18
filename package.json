@@ -2,7 +2,7 @@
   "name": "moye-markdown",
   "displayName": "墨尔 markdown editor",
   "description": "支持可视化编辑、颜色排版、公式图表与 PDF / HTML / Word 导出的 Markdown 编辑器。",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "publisher": "qycools",
   "license": "MIT",
   "engines": {
@@ -197,12 +197,6 @@
         "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen"
       },
       {
-        "command": "vditorMarkdown.redo",
-        "key": "cmd+y",
-        "mac": "cmd+y",
-        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen && isMac"
-      },
-      {
         "command": "vditorMarkdown.bold",
         "key": "ctrl+b",
         "mac": "cmd+b",
@@ -243,6 +237,11 @@
         "key": "ctrl+alt+e",
         "mac": "cmd+alt+e",
         "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen"
+      },
+      {
+        "command": "vditorMarkdown.redo",
+        "key": "cmd+y",
+        "when": "isMac && activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen"
       }
     ],
     "menus": {
@@ -423,7 +422,7 @@
     }
   },
   "scripts": {
-    "build": "node --no-warnings scripts/build.mjs",
+    "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/test.mjs",
     "test:integration": "node scripts/integration.mjs",
@@ -448,5 +447,13 @@
     "typescript": "^5.9.0"
   },
   "author": "qycools",
-  "icon": "media/brand/icon.png"
+  "icon": "media/brand/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/qycools/moer-markdown-editor.git"
+  },
+  "homepage": "https://github.com/qycools/moer-markdown-editor",
+  "bugs": {
+    "url": "https://github.com/qycools/moer-markdown-editor/issues"
+  }
 }

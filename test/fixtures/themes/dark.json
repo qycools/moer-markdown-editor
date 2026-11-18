@@ -1,0 +1,13 @@
+{
+  "include": "./base.json",
+  "colors": {
+    "editor.background": "#17202a", "editor.foreground": "#e6edf3", "sideBar.background": "#212d3a", "textCodeBlock.background": "#202b38", "focusBorder": "#58a6ff",
+    "textLink.foreground": "#58a6ff", "textLink.activeForeground": "#9bcaff", "icon.foreground": "#c5c5c5",
+    "toolbar.hoverBackground": "#5a5d5e50", "toolbar.activeBackground": "#63666750", "actionBar.toggledBackground": "#383a49"
+  },
+  "tokenColors": [
+    { "scope": "keyword", "settings": { "foreground": "#ff7bc6" } },
+    { "scope": "string", "settings": { "foreground": "#a5d6ff" } },
+    { "scope": "constant.numeric", "settings": { "foreground": "#79c0ff" } }
+  ]
+}

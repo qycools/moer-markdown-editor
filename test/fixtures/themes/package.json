@@ -1,0 +1,13 @@
+{
+  "name": "vditor-test-themes",
+  "publisher": "local-tests",
+  "version": "1.0.0",
+  "engines": { "vscode": "^1.95.0" },
+  "contributes": {
+    "themes": [
+      { "id": "Vditor Test Light", "label": "Fixture Light", "uiTheme": "vs", "path": "./light.json" },
+      { "id": "Vditor Test Dark", "label": "Fixture Dark", "uiTheme": "vs-dark", "path": "./dark.json" },
+      { "id": "Vditor Test Legacy", "label": "Fixture Legacy", "uiTheme": "vs-dark", "path": "./legacy.tmTheme" }
+    ]
+  }
+}

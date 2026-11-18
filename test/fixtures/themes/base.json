@@ -1,0 +1,16 @@
+{
+  "colors": {
+    "editor.background": "#fcf8ee", "editor.foreground": "#075c65",
+    "sideBar.background": "#f0ead9", "widget.border": "#d7d5c9",
+    "focusBorder": "#00c5df", "descriptionForeground": "#8b9999", "textCodeBlock.background": "#f0ecdd",
+    "textLink.foreground": "#006ab1", "textLink.activeForeground": "#004f84", "icon.foreground": "#424242",
+    "toolbar.hoverBackground": "#b8b8b850", "toolbar.activeBackground": "#a6a6a650", "actionBar.toggledBackground": "#dddddd"
+  },
+  "tokenColors": [
+    { "scope": "keyword", "settings": { "foreground": "#9c27b0" } },
+    { "scope": "comment", "settings": { "foreground": "#123456" } },
+    { "scope": "string", "settings": { "foreground": "#0084bf" } },
+    { "scope": "constant.numeric", "settings": { "foreground": "#00885f" } },
+    { "scope": "support.type.property-name.json", "settings": { "foreground": "#0091a0" } }
+  ]
+}

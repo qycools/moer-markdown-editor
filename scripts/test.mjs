@@ -1,220 +1,156 @@
-import assert from "node:assert/strict";
-import fs from "node:fs/promises";
-import Module from "node:module";
-import path from "node:path";
-import { createRequire } from "node:module";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import assert from 'node:assert/strict';
+import { build } from 'esbuild';
+import { mkdir, readFile, writeFile, cp } from 'node:fs/promises';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { chromium } from 'playwright-core';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const require = createRequire(import.meta.url);
-
-// Mock vscode module before loading dist/extension.js
-const origLoad = Module._load;
-Module._load = function (request, parent, isMain) {
-  if (request === "vscode") return {};
-  return origLoad.apply(this, arguments);
-};
-
-const { findBrowser, exportDocument } = require(path.join(root, "dist/extension.js"));
-const { chromium } = require(path.join(root, "node_modules/playwright-core"));
-
-const resultsDir = path.join(root, ".test-results");
-await fs.rm(resultsDir, { recursive: true, force: true });
-await fs.mkdir(resultsDir, { recursive: true });
-
-// 1. Test browser discovery
-const detectedBrowser = await findBrowser();
-assert.ok(detectedBrowser, "findBrowser() should locate an installed browser");
-const detectedStat = await fs.stat(detectedBrowser);
-assert.ok(detectedStat.isFile(), `Detected browser should be a file: ${detectedBrowser}`);
-console.log("Browser detected:", detectedBrowser);
-
-if (process.platform === "darwin") {
-  try {
-    await fs.access("/Applications/Google Chrome.app");
-    const resolvedApp = await findBrowser("/Applications/Google Chrome.app");
-    assert.ok(
-      resolvedApp.endsWith("/Contents/MacOS/Google Chrome"),
-      `Expected .app resolution to executable, got: ${resolvedApp}`
-    );
-    console.log("macOS .app bundle resolved:", resolvedApp);
-  } catch {
-  }
+await mkdir('.test-results', { recursive: true });
+await build({ entryPoints: ['test/platformChecks.ts'], outfile: 'dist/platform-checks.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
+await (await import('../dist/platform-checks.mjs?test=' + Date.now())).checkPlatforms();
+await build({ entryPoints: ['src/export.ts'], outfile: 'dist/test-export.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
+const { exportDocument, findBrowser } = await import('../dist/test-export.mjs?test=' + Date.now());
+const { minimalEdit, validateExport, exportDefaults, defaults, actions, validPalette } = await import('../dist/shared.mjs?test=' + Date.now());
+assert.equal(validPalette([]),false); assert.equal(validPalette(Array(9).fill('#123456')),false); assert.equal(validPalette(['red']),false); assert.equal(validPalette(['#123456']),true);
+for (const [before, after] of [['abc', 'axc'], ['', '新文档'], ['a😀b', 'a😁b'], ['甲\r\n乙', '甲\r\n丙'], ['same', 'same']]) {
+  const edit = minimalEdit(before, after);
+  assert.equal(edit ? before.slice(0, edit.start) + edit.text + before.slice(edit.end) : before, after);
 }
-
-await assert.rejects(() => findBrowser("/nonexistent/browser/executable"), /指定的浏览器不存在/);
-
-// 2. Test PDF, HTML, DOCX export
-const sourceMd = path.join(resultsDir, "sample.md");
-const sampleMarkdown = [
-  "# 测试文档",
-  "",
-  "正文测试 **粗体** 与 <span style=\"color: #26a7df\">蓝色文字</span>。",
-  "",
-  "## 公式与表格",
-  "",
-  "行内公式：$E = mc^2$",
-  "",
-  "| 列 A | 列 B |",
-  "| --- | --- |",
-  "| 1 | 2 |",
-  "",
-  "## 图表",
-  "",
-  "```mermaid",
-  "graph TD",
-  "  A[开始] --> B[结束]",
-  "```",
-  ""
-].join("\n");
-await fs.writeFile(sourceMd, sampleMarkdown, "utf8");
-
-const baseExportOptions = {
-  topMargin: 25,
-  toc: true,
-  beautify: true,
-  theme: false,
-  paperSize: "A4",
-  font: "",
-  fontSize: 13,
-  directory: resultsDir
-};
-const settings = {
-  lineHeight: 1.7,
-  fontFamily: "",
-  codeFontFamily: "",
-  browserPath: detectedBrowser
-};
-
-const pdfPath = path.join(resultsDir, "sample.pdf");
-const pdfRes = await exportDocument({
-  root,
-  markdown: sampleMarkdown,
-  sourcePath: sourceMd,
-  outputPath: pdfPath,
-  options: { ...baseExportOptions, format: "pdf" },
-  settings,
-  dark: false,
-  appearance: {}
-});
-const pdfBytes = await fs.readFile(pdfPath);
-assert.equal(pdfBytes.subarray(0, 5).toString("utf8"), "%PDF-", "PDF output must start with %PDF-");
-assert.ok(pdfRes.bytes > 1000, "PDF output should not be empty");
-console.log("PDF export passed:", pdfRes.bytes, "bytes");
-
-const htmlPath = path.join(resultsDir, "sample.html");
-const htmlRes = await exportDocument({
-  root,
-  markdown: sampleMarkdown,
-  sourcePath: sourceMd,
-  outputPath: htmlPath,
-  options: { ...baseExportOptions, format: "html" },
-  settings,
-  dark: false,
-  appearance: {}
-});
-const htmlText = await fs.readFile(htmlPath, "utf8");
-assert.ok(htmlText.startsWith("<!doctype html>"), "HTML output must start with <!doctype html>");
-assert.ok(htmlText.includes("测试文档"), "HTML output must include heading content");
-console.log("HTML export passed:", htmlRes.bytes, "bytes");
-
-const docxPath = path.join(resultsDir, "sample.docx");
-const docxRes = await exportDocument({
-  root,
-  markdown: sampleMarkdown,
-  sourcePath: sourceMd,
-  outputPath: docxPath,
-  options: { ...baseExportOptions, format: "docx" },
-  settings,
-  dark: false,
-  appearance: {}
-});
-const docxBytes = await fs.readFile(docxPath);
-assert.equal(docxBytes.subarray(0, 2).toString("utf8"), "PK", "DOCX output must be a zip archive (PK)");
-assert.ok(docxRes.bytes > 2000, "DOCX output should not be empty");
-console.log("DOCX export passed:", docxRes.bytes, "bytes");
-
-// 3. Test Webview UI in headless browser
-const harnessHtml = path.join(resultsDir, "webview-test.html");
-const boot = {
-  cdn: pathToFileURL(path.join(root, "media/vditor")).href,
-  base: pathToFileURL(resultsDir + path.sep).href,
-  settings: {
-    mode: "ir",
-    theme: "auto",
-    uiFontSize: 13,
-    editorFontSize: 13,
-    fontFamily: "",
-    boldColor: "",
-    pageWidth: "100%",
-    lineHeight: 1.7,
-    typewriterMode: false,
-    codeFontFamily: "",
-    codeMaxHeight: "none",
-    codeTheme: "auto",
-    imageMaxWidth: 100,
-    imageMaxHeight: 70,
-    outline: true,
-    outlineWidth: 216,
-    browserPath: ""
-  },
-  dark: false,
-  themes: [],
-  activeTheme: "",
-  codePalette: {},
-  filename: "sample.md"
-};
-
-await fs.writeFile(
-  harnessHtml,
-  `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><link href="${
-    pathToFileURL(path.join(root, "dist/webview.css")).href
-  }" rel="stylesheet"><script>window.__posted = []; window.acquireVsCodeApi = () => ({ postMessage: (m) => window.__posted.push(m), getState: () => ({}), setState: () => {} }); window.VM_BOOT=${JSON.stringify(
-    boot
-  )};</script></head><body><div id="app"><div id="editor"></div><footer id="status" aria-live="polite" hidden></footer></div><div id="overlay"></div><script src="${
-    pathToFileURL(path.join(root, "dist/webview.js")).href
-  }"></script></body></html>`,
-  "utf8"
-);
-
-const browser = await chromium.launch({
-  executablePath: detectedBrowser,
-  headless: true,
-  args: ["--allow-file-access-from-files"]
-});
+assert.throws(() => validateExport({ ...exportDefaults, fontSize: 0 }));
+assert.throws(() => validateExport({ ...exportDefaults, topMargin: Infinity }));
+assert.equal(actions.length, 24);
+console.log('PASS document diff, export validation, 24 toolbar actions');
+const fixture = await readFile('test/fixtures/sample.md', 'utf8');
+const browser = await chromium.launch({ executablePath: await findBrowser(), headless: true, args: ['--allow-file-access-from-files'] });
+const errors = [];
+const page = await browser.newPage({ viewport: { width: 1320, height: 950 }, deviceScaleFactor: 1 });
+page.on('pageerror', error => { errors.push(error.message); console.error('BROWSER ERROR', error.message); });
+page.on('console', msg => { if (msg.type() === 'error') console.error('BROWSER CONSOLE', msg.text().slice(0, 400)); });
+const themeBase = JSON.parse(await readFile('test/fixtures/themes/base.json', 'utf8'));
+const themeDark = JSON.parse(await readFile('test/fixtures/themes/dark.json', 'utf8'));
+const mockTheme = (name, kind, data) => { const c={...themeBase.colors,...data.colors}; return {id:'local-tests.vditor-test-themes/Vditor Test '+name,label:'Fixture '+name,kind,colors:{bg:c['editor.background'],fg:c['editor.foreground'],panel:c['sideBar.background'],border:c['widget.border'],muted:c.descriptionForeground,accent:c.focusBorder,codeBg:c['textCodeBlock.background']},tokens:{keyword:kind==='dark'?'#ff7bc6':'#9c27b0',string:kind==='dark'?'#a5d6ff':'#0084bf',number:kind==='dark'?'#79c0ff':'#00885f',comment:'#123456',function:'#795e26',type:'#267f99',variable:'#001080',literal:'#0000ff',property:'#0091a0'}}; };
+const themes=[mockTheme('Light','light',{}),mockTheme('Dark','dark',themeDark)];
+const boot = { themes, activeTheme:themes[0].id, codePalette:themes[0].tokens, cdn: pathToFileURL(path.resolve('media/vditor')).href, base: pathToFileURL(path.resolve('test/fixtures') + path.sep).href, settings: { ...defaults, theme: themes[0].id }, dark: false, filename: '功能验收.md' };
+const hostStyle = Object.entries(themeBase.colors).map(([key,value]) => `--vscode-${key.replaceAll('.','-')}:${value}`).join(';');
+const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>:root{${hostStyle}}</style><link href="${pathToFileURL(path.resolve('dist/webview.css')).href}" rel="stylesheet"></head><body><div id="app"><div id="editor"></div><footer id="status"></footer></div><div id="overlay"></div><script>window.VM_BOOT=${JSON.stringify(boot)};window.VM_MESSAGES=[];window.VM_DOCUMENT=${JSON.stringify(fixture)};window.acquireVsCodeApi=()=>({getState(){return{}},setState(){},postMessage(m){window.VM_MESSAGES.push(m);if(m.type==='ready'){setTimeout(()=>window.postMessage({type:'document',text:window.VM_DOCUMENT,version:1,initial:true},'*'),0)}else if(m.type==='edit'){if(window.VM_DOCUMENT!==m.baseText)throw Error('Stale document base');window.VM_DOCUMENT=m.text;setTimeout(()=>window.postMessage({type:'ack',seq:m.seq,text:m.text,version:m.seq+1},'*'),0)}else if(m.requestId){if(m.type==='clipboardWrite')window.VM_CLIPBOARD=m.text;setTimeout(()=>window.postMessage({type:'result',requestId:m.requestId,value:m.type==='clipboardRead'?(window.VM_CLIPBOARD||''):m.type==='browse'?'C:/Export':true},'*'),0)}}});</script><script src="${pathToFileURL(path.resolve('dist/webview.js')).href}"></script></body></html>`;
+await writeFile('.test-results/frontend.html', html);
 try {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  const errors = [];
-  page.on("pageerror", (err) => errors.push(err.message));
-  await page.goto(pathToFileURL(harnessHtml).href);
-  await page.waitForFunction(() => !!window.VM_APP?.ready);
-
-  await page.evaluate(() => {
-    window.postMessage({ type: "document", text: "# 标题一\n\n测试内容", version: 1, initial: true }, "*");
+  await page.goto(pathToFileURL(path.resolve('.test-results/frontend.html')).href);
+  await page.waitForFunction(() => window.VM_APP?.ready && document.querySelector('#outline button'), { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector('.vditor-ir .language-math .katex') || document.querySelector('.vditor-ir .katex'), { timeout: 20000 });
+  assert.equal(await page.locator('#toolbar [data-action]').count(), 24);
+  assert.equal(await page.evaluate(() => window.VM_MESSAGES.filter(m => m.type === 'edit').length), 0, 'Opening must not dirty the file');
+  const colored = page.locator('.vditor-ir [data-vm-color]').filter({ hasText: '红色文字' });
+  assert.equal(await colored.evaluate(e => getComputedStyle(e).color), 'rgb(229, 57, 53)');
+  assert.ok((await page.evaluate(() => window.VM_APP.getValue())).includes('style="color: #e53935"'));
+  await page.screenshot({ path: '.test-results/editor-light.png', fullPage: true });
+  await page.locator('[data-action=settings]').click();
+  assert.equal(await page.locator('#settings-menu h3').count(), 7);
+  await page.screenshot({ path: '.test-results/settings.png' });
+  await page.locator('[data-setting=mode]').selectOption('wysiwyg');
+  await page.locator('#settings-done').click();
+  assert.equal(await page.evaluate(() => window.VM_APP.editor.vditor.currentMode), 'wysiwyg');
+  assert.equal(await page.locator('.vditor-wysiwyg [data-vm-color]').filter({ hasText: '红色文字' }).evaluate(e => getComputedStyle(e).color), 'rgb(229, 57, 53)');
+  await page.evaluate(() => { const e=document.querySelector('.vditor-wysiwyg strong');const range=document.createRange();range.selectNodeContents(e);const s=getSelection();s.removeAllRanges();s.addRange(range); });
+  await page.locator('#selection-colors').waitFor({state:'visible'});
+  await page.locator('[data-text-color="#26a7df"]').click();
+  await page.waitForFunction(() => window.VM_MESSAGES.some(m => m.type === 'edit'));
+  await writeFile('.test-results/color-result.md', await page.evaluate(() => window.VM_DOCUMENT));
+  await writeFile('.test-results/color-dom.html', await page.locator('.vditor-wysiwyg').innerHTML());
+  assert.ok((await page.evaluate(() => window.VM_DOCUMENT)).includes('**粗体**'), 'Color must retain nested bold');
+  console.log('PASS IR/WYSIWYG color rendering and bold preservation');
+  await page.locator('[data-action=settings]').click();
+  await page.locator('[data-setting=mode]').selectOption('sv');
+  await page.locator('#settings-done').click();
+  await page.waitForFunction(() => document.querySelector('.vditor-sv').value.includes('颜色'));
+  await page.locator('.vditor-sv').fill('# 修改后的标题\n\n正文新增测试。\n');
+  await page.locator('.vditor-sv').dispatchEvent('input');
+  await page.waitForFunction(() => window.VM_DOCUMENT.includes('正文新增测试'));
+  await page.locator('[data-action=search]').click();
+  await page.locator('#search-input').fill('测试');
+  assert.match(await page.locator('#search-count').textContent(), /1 \/ 1/);
+  await page.locator('#search-input').fill('');
+  await page.locator('#search-input').pressSequentially('测试');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'search-input', 'Search must retain input focus');
+  await page.locator('#search-close').click();
+  await page.locator('[data-action=brightness]').click();
+  assert.equal(await page.locator('html').getAttribute('data-mode'), 'dark');
+  await page.screenshot({ path: '.test-results/editor-dark.png' });
+  await page.locator('[data-action=export]').click();
+  assert.equal(await page.locator('[data-format]').count(), 3);
+  await page.screenshot({ path: '.test-results/export-dialog.png' });
+  await page.locator('[data-format=html]').click();
+  assert.equal(await page.locator('#export-paperSize').isDisabled(), true);
+  await page.locator('#cancel-export').click();
+  await page.locator('[data-action=outline]').click();
+  assert.equal(await page.locator('#outline').isVisible(), false);
+  console.log('PASS source editing, search, theme, outline, export/settings dialogs');
+  await page.locator('[data-action=settings]').click();
+  await page.locator('[data-setting=mode]').selectOption('wysiwyg');
+  await page.locator('#settings-done').click();
+  const formatting = [['bold', /\*\*示例文字\*\*/], ['italic', /\*示例文字\*/], ['strike', /~~示例文字~~/], ['link', /\[示例文字\]\(/], ['list', /[-*] 示例文字/], ['ordered-list', /1\. 示例文字/], ['check', /\[[ Xx]?\]/], ['quote', /> 示例文字/], ['code', /```/], ['table', /\|/]];
+  for (const [command, expected] of formatting) {
+    await page.evaluate(() => { window.VM_DOCUMENT='示例文字\n';window.VM_APP.applyDocument(window.VM_DOCUMENT,100);const surface=window.VM_APP.editor.vditor.wysiwyg.element;surface.focus();const range=document.createRange();range.selectNodeContents(surface.querySelector('p'));const selection=getSelection();selection.removeAllRanges();selection.addRange(range); });
+    await page.locator(`[data-action="${command}"]`).click();
+    await page.waitForFunction(() => window.VM_MESSAGES.at(-1)?.type !== 'edit');
+    assert.match(await page.evaluate(() => window.VM_APP.getValue()), expected, `Native formatting: ${command}`);
+  }
+  await page.evaluate(() => { window.VM_DOCUMENT='标题文字\n';window.VM_APP.applyDocument(window.VM_DOCUMENT,101);const e=window.VM_APP.editor.vditor.wysiwyg.element;e.focus();const r=document.createRange();r.selectNodeContents(e.querySelector('p'));getSelection().removeAllRanges();getSelection().addRange(r); });
+  await page.locator('[data-action=headings]').click();await page.locator('[data-level="3"]').click();
+  assert.match(await page.evaluate(() => window.VM_APP.getValue()), /### 标题文字/);
+  console.log('PASS heading and all native formatting toolbar actions');
+  await page.evaluate(() => {window.VM_DOCUMENT='<span style="color: #e53935; background-color: #fff176">**彩色内容**</span>\n';window.VM_APP.applyDocument(window.VM_DOCUMENT,102);const e=window.VM_APP.editor.vditor.wysiwyg.element;e.focus();const r=document.createRange();r.setStart(e.querySelector('strong').firstChild,2);r.collapse(true);getSelection().removeAllRanges();getSelection().addRange(r);});
+  await page.locator('.vditor-wysiwyg [data-vm-color] strong').click();await page.locator('#annotation-clear').click();
+  const cleared=await page.evaluate(()=>window.VM_APP.getValue());
+  assert.ok(!cleared.includes('background-color'));assert.ok(!cleared.includes('color: #e53935'));assert.ok(cleared.includes('**彩色内容**'));
+  await page.locator('[data-action=theme]').click();await page.locator('[data-theme-id=auto]').click();
+  await page.locator('[data-action=brightness]').click();
+  assert.equal(await page.locator('body').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(23, 32, 42)');
+  console.log('PASS independent color clearing and explicit theme brightness');
+  await page.evaluate(()=>{window.VM_DOCUMENT='输入测试：\n';window.VM_APP.applyDocument(window.VM_DOCUMENT,103);window.VM_APP.editor.vditor.wysiwyg.element.focus();});
+  await page.keyboard.press('Control+End');
+  const ime=await page.context().newCDPSession(page);
+  await ime.send('Input.imeSetComposition',{text:'中文合成',selectionStart:4,selectionEnd:4});
+  assert.equal(await page.evaluate(()=>window.VM_DOCUMENT),'输入测试：\n','IME draft must not prematurely overwrite the document');
+  await ime.send('Input.insertText',{text:'中文合成'});
+  await page.waitForFunction(()=>window.VM_DOCUMENT.includes('中文合成'));
+  await ime.detach();
+  console.log('PASS IME composition and commit');
+  await build({ entryPoints: ['test/editorChecks.ts'], outfile: 'dist/editor-checks.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
+  const { checkEditorUI } = await import('../dist/editor-checks.mjs?test=' + Date.now());
+  await checkEditorUI(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,500); },text), {
+    read: () => page.evaluate(() => window.VM_CLIPBOARD || ''), write: text => page.evaluate(text => {window.VM_CLIPBOARD=text;},text),
   });
-  await page.waitForFunction(() => document.querySelectorAll("#outline button[data-heading]").length === 1);
+  await build({ entryPoints: ['test/themeChecks.ts'], outfile: 'dist/theme-checks.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
+  const { checkThemeUI } = await import('../dist/theme-checks.mjs?test=' + Date.now());
+  await checkThemeUI(page, text => page.evaluate(text => {window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,600);},text));
+  await build({ entryPoints: ['test/colorChecks.ts'], outfile: 'dist/color-checks.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
+  const { checkColorUI } = await import('../dist/color-checks.mjs?test=' + Date.now());
+  await checkColorUI(page, text => page.evaluate(text => {window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,650);},text));
+  await build({ entryPoints: ['test/layoutChecks.ts'], outfile: 'dist/layout-checks.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
+  const { checkLayoutUI } = await import('../dist/layout-checks.mjs?test=' + Date.now());
+  await checkLayoutUI(page, text => page.evaluate(text => {window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,700);},text), {read: () => page.evaluate(() => window.VM_CLIPBOARD || '')});
+  await build({ entryPoints: ['test/clipboardChecks.ts'], outfile: 'dist/clipboard-checks.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
+  await (await import('../dist/clipboard-checks.mjs?test=' + Date.now())).checkClipboardItems(page);
+  assert.deepEqual(errors, []);
+} finally { await browser.close(); }
 
-  // Verify settings UI includes macOS fonts
-  await page.click('[data-action="settings"]');
-  const hasPingFang = await page.locator('#settings-menu option[value="PingFang SC"]').count();
-  assert.ok(hasPingFang >= 1, "Settings font dropdown should include PingFang SC");
-  await page.click("#settings-done");
-
-  // Verify beforeinput historyUndo routes to VS Code undo message
-  await page.evaluate(() => {
-    window.__posted.length = 0;
-    const surface = window.VM_APP.editor.vditor.ir.element;
-    surface.focus();
-    const ev = new InputEvent("beforeinput", { bubbles: true, cancelable: true, inputType: "historyUndo" });
-    surface.dispatchEvent(ev);
-  });
-  const postedUndo = await page.evaluate(() => window.__posted.some((m) => m.type === "undo"));
-  assert.ok(postedUndo, "beforeinput historyUndo should post undo command to VS Code");
-
-  assert.deepEqual(errors, [], `Webview page errors encountered: ${errors.join("; ")}`);
-  console.log("Webview browser test passed.");
-} finally {
-  await browser.close();
+const outputDir = path.resolve('.test-results/中文导出');
+await mkdir(outputDir, { recursive: true });
+for (const format of ['html', 'pdf', 'docx']) {
+  const options = { ...exportDefaults, format, beautify: true };
+  const result = await exportDocument({ root: process.cwd(), markdown: fixture, sourcePath: path.resolve('test/fixtures/sample.md'), outputPath: path.join(outputDir, `功能验收.${format}`), options, settings: defaults, dark: false, progress: text => console.log(`${format}: ${text}`) });
+  assert.ok(result.bytes > 1000);
+  console.log(`PASS ${format.toUpperCase()} (${result.bytes} bytes)`);
 }
-
-console.log("All tests passed.");
+const diagrams = await readFile('test/fixtures/diagrams.md','utf8');
+await exportDocument({ root: process.cwd(), markdown: diagrams, sourcePath: path.resolve('test/fixtures/diagrams.md'), outputPath: path.join(outputDir, 'diagrams.html'), options: {...exportDefaults,format:'html'}, settings: defaults, dark:false, progress: text => console.log('diagrams: '+text) });
+console.log('PASS additional diagram renderers');
+const offline=await chromium.launch({executablePath:await findBrowser(),headless:true});
+try{const p=await offline.newPage();await p.context().setOffline(true);await p.goto(pathToFileURL(path.join(outputDir,'功能验收.html')).href);assert.ok(await p.locator('.katex').count()>0);assert.ok(await p.locator('.language-mermaid svg').count()>0);assert.equal(await p.locator('img').evaluateAll(imgs=>imgs.every(img=>img.complete&&img.naturalWidth>0)),true);await p.screenshot({path:'.test-results/html-offline.png',fullPage:true});}finally{await offline.close();}
+console.log('PASS standalone HTML with networking disabled');
+await assert.rejects(findBrowser('C:/missing-browser.exe'), /浏览器不存在/);
+const abort = new AbortController(); abort.abort();
+await assert.rejects(exportDocument({ root: process.cwd(), markdown: fixture, sourcePath: 'sample.md', outputPath: 'unused.pdf', options: exportDefaults, settings: defaults, dark: false, signal: abort.signal }));
+console.log('PASS missing-browser and cancellation handling');
+await writeFile('.test-results/test-summary.json', JSON.stringify({ passed: true, date: new Date().toISOString(), exports: ['html', 'pdf', 'docx'], browserErrors: errors }, null, 2));
