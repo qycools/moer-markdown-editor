@@ -2,7 +2,7 @@
   "name": "moye-markdown",
   "displayName": "墨尔 markdown editor",
   "description": "支持可视化编辑、颜色排版、公式图表与 PDF / HTML / Word 导出的 Markdown 编辑器。",
-  "version": "0.1.10",
+  "version": "1.0.0",
   "publisher": "qycools",
   "license": "MIT",
   "engines": {
@@ -180,6 +180,11 @@
         "command": "vditorMarkdown.settings",
         "title": "墨尔 markdown editor: 设置",
         "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.linkBack",
+        "title": "墨尔 markdown editor: 返回文档内链接起点",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
       }
     ],
     "keybindings": [
@@ -247,6 +252,11 @@
         "command": "vditorMarkdown.redo",
         "key": "cmd+y",
         "when": "isMac && activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen"
+      },
+      {
+        "command": "vditorMarkdown.linkBack",
+        "key": "escape",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen && editorAreaFocus && !inputFocus && vditorMarkdown.canGoBack"
       }
     ],
     "menus": {

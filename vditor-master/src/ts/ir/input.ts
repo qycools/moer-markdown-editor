@@ -230,6 +230,10 @@ export const input = (vditor: IVditor, range: Range, ignoreSpace = false, event?
         vditor.ir.element.insertAdjacentElement("beforeend", allFootnoteElement[0]);
     }
 
+    if (vditor.options.preview.editOnDoubleClick) {
+        const source = vditor.ir.element.querySelector("wbr")?.closest(".vditor-ir__marker--pre");
+        source?.parentElement.classList.add("vditor-ir__node--expand");
+    }
     setRangeByWbr(vditor.ir.element, range);
 
     vditor.ir.element.querySelectorAll(".vditor-ir__preview[data-render='2']").forEach((item: HTMLElement) => {

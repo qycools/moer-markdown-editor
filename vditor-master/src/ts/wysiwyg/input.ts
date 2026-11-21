@@ -195,6 +195,14 @@ export const input = (vditor: IVditor, range: Range, event?: InputEvent) => {
         }
 
         // 设置光标
+        const caret = vditor.wysiwyg.element.querySelector("wbr");
+        if (vditor.options.preview.editOnDoubleClick) {
+            vditor.wysiwyg.element.querySelectorAll(".vditor-wysiwyg__preview[data-render='2']")
+                .forEach((preview) => {
+                    const source = preview.previousElementSibling as HTMLElement;
+                    source.style.display = source.contains(caret) ? (source.tagName === "PRE" ? "block" : "inline-block") : "none";
+                });
+        }
         setRangeByWbr(vditor.wysiwyg.element, range);
 
         vditor.wysiwyg.element.querySelectorAll(".vditor-wysiwyg__preview[data-render='2']")

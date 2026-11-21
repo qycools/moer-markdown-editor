@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { readFile, writeFile, mkdir, copyFile } from 'node:fs/promises';
 import { chromium, type Frame } from 'playwright-core';
-import { checkEditorUI } from './editorChecks';
+import { checkDocumentLinks, checkEditorUI, checkInlineSource } from './editorChecks';
 import { checkThemeUI } from './themeChecks';
-import { checkNativeColors } from './nativeColorChecks';
+import { checkNativeColors, checkOutlineHover } from './nativeColorChecks';
 import { checkLayoutUI } from './layoutChecks';
 import { checkColorUI } from './colorChecks';
 import { checkContentTools } from './contentChecks';
@@ -80,6 +80,72 @@ export async function run() {
       await frame!.waitForFunction(version => window.VM_APP.documentVersion() >= version,document.version);
       await frame!.waitForFunction(text => window.VM_APP.getValue().includes(text.trim().split('\n')[0]) && window.VM_APP.getValue().includes(text.trim().split('\n').at(-1)!), text);
     };
+    await checkDocumentLinks(frame!, replaceDocument, () => page.keyboard.press('Escape'));
+    await replaceDocument('# Link origin\n\n[Jump](#destination)\n\n' + 'Spacer.\n\n'.repeat(65) + '## Destination\n\nTarget text.\n');
+    const linkSurface = frame!.locator('.vditor-ir>.vditor-reset');
+    const jump = linkSurface.locator('.vditor-ir__link');
+    await jump.scrollIntoViewIfNeeded();
+    const origin = await linkSurface.evaluate(element => element.scrollTop);
+    await jump.click();
+    const destination = await linkSurface.evaluate(element => element.scrollTop);
+    assert.ok(destination > origin + 100, 'The link scrolls to the destination');
+    for (const [action, panel] of [['search', '#search-bar'], ['settings', '#settings-menu']]) {
+      await frame!.locator(`[data-action=${action}]`).click();
+      await frame!.locator(panel).waitFor({ state: 'visible' });
+      await page.keyboard.press('Escape');
+      await frame!.locator(panel).waitFor({ state: 'hidden' });
+      assert.equal(await linkSurface.evaluate(element => element.scrollTop), destination, `Escape closes ${action} before navigating back`);
+    }
+    await page.keyboard.press('Escape');
+    await frame!.waitForFunction(origin => Math.abs(window.document.querySelector('.vditor-ir>.vditor-reset')!.scrollTop - origin) <= 1, origin);
+    console.log('PASS Escape closes the editor panels before returning from a link');
+    const localTarget = path.join(folder, 'Link target.txt');
+    await writeFile(localTarget, 'Local link target\n');
+    await replaceDocument('[Local target](./Link%20target.txt)\n');
+    await frame!.locator('.vditor-ir .vditor-ir__link').click();
+    const localUri = vscode.Uri.file(localTarget).toString();
+    await until(() => vscode.window.activeTextEditor?.document.uri.toString() === localUri, 'Relative link opens a sibling file in VS Code').catch(async error => {
+      console.log('Local link diagnostics', { expected: localUri, active: vscode.window.activeTextEditor?.document.uri.toString(), tabs: vscode.window.tabGroups.activeTabGroup.tabs.map(tab => tab.label), status: await frame!.locator('#status').textContent() });
+      throw error;
+    });
+    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+    console.log('PASS relative links with encoded spaces open their files in VS Code');
+    await checkInlineSource(frame!, replaceDocument);
+    const historyText = Array.from({ length: 75 }, (_, index) => `## Line ${index + 1}\n\nHistory paragraph ${index + 1}.\n`).join('\n');
+    await replaceDocument(historyText);
+    const location = historyText.indexOf('History paragraph 50.');
+    const change = new vscode.WorkspaceEdit();
+    change.replace(document.uri, new vscode.Range(document.positionAt(location), document.positionAt(location + 'History'.length)), 'Updated');
+    assert.equal(await vscode.workspace.applyEdit(change), true);
+    await frame!.waitForFunction(() => window.VM_APP.getValue().includes('Updated paragraph 50.'));
+    const historySurface = frame!.locator('.vditor-ir>.vditor-reset');
+    for (const [command, line] of [['undo', 'History paragraph 50.'], ['redo', 'Updated paragraph 50.']]) {
+      await historySurface.evaluate(element => { element.scrollTop = 0; });
+      await vscode.commands.executeCommand(`vditorMarkdown.${command}`);
+      await frame!.waitForFunction(line => {
+        const surface = window.document.querySelector('.vditor-ir>.vditor-reset')!;
+        const paragraph = [...surface.querySelectorAll('p')].find(element => element.textContent === line);
+        const rect = paragraph?.getBoundingClientRect(), viewport = surface.getBoundingClientRect();
+        return rect && rect.top >= viewport.top && rect.bottom <= viewport.bottom;
+      }, line);
+      assert.equal(await frame!.locator('#status').textContent(), command === 'undo' ? '已撤销' : '已重做');
+    }
+    console.log('PASS VS Code undo and redo reveal the changed paragraph from outside the viewport');
+    const beforeReplace = '# Find in VS Code\n\n**Target** target.\n';
+    await replaceDocument(beforeReplace);
+    await frame!.locator('.vditor-ir strong').click();
+    await page.keyboard.press('Control+f');
+    const find = frame!.locator('#search-input');
+    await find.fill('target');
+    assert.equal(await frame!.locator('#search-count').textContent(), '1 / 2');
+    await frame!.locator('#search-toggle-replace').click();
+    await frame!.locator('#search-replacement').fill('updated');
+    await frame!.locator('#search-replace-all').click();
+    await until(() => document.getText().includes('**updated** updated.'), 'Replace all reaches TextDocument');
+    await find.press('Escape');
+    await page.keyboard.press('Control+z');
+    await until(() => document.getText() === beforeReplace, 'One undo reverts all replacements');
+    console.log('PASS Ctrl+F, replace all, and one-step undo in the VS Code webview');
     const installedThemes = await frame!.evaluate(()=>window.VM_BOOT.themes);
     const legacy = installedThemes.find((theme:any)=>theme.label==='Fixture Legacy');
     assert.equal(legacy?.colors.bg,'#272822','Legacy TextMate themes are loaded');
@@ -89,14 +155,18 @@ export async function run() {
     await checkThemeUI(frame!,replaceDocument);
     const workbench=vscode.workspace.getConfiguration('workbench'), previousTheme=workbench.inspect<string>('colorTheme')?.globalValue;
     try {
-      for (const [theme,bg,keyword,codeBg] of [['Vditor Test Dark','rgb(23, 32, 42)','#ff7bc6','rgb(32, 43, 56)'],['Vditor Test Light','rgb(252, 248, 238)','#9c27b0','rgb(240, 236, 221)']]) {
+      for (const [theme,bg,keyword,codeBg,hoverBg,hoverFg] of [
+        ['Vditor Test Dark','rgb(23, 32, 42)','#ff7bc6','rgb(32, 43, 56)','rgb(42, 45, 46)','rgb(240, 246, 252)'],
+        ['Vditor Test Light','rgb(252, 248, 238)','#9c27b0','rgb(240, 236, 221)','rgb(232, 232, 232)'],
+      ]) {
         await workbench.update('colorTheme',theme,vscode.ConfigurationTarget.Global);
         await frame!.waitForFunction(({bg,keyword,codeBg})=>getComputedStyle(window.document.body).backgroundColor===bg&&window.document.documentElement.style.getPropertyValue('--host-code-keyword')===keyword&&getComputedStyle(window.document.querySelector('.vm-code-block')!).backgroundColor===codeBg,{bg,keyword,codeBg});
         await checkNativeColors(frame!);
+        await checkOutlineHover(frame!, hoverBg, hoverFg);
       }
     } finally { await workbench.update('colorTheme',previousTheme,vscode.ConfigurationTarget.Global); }
     console.log('PASS Auto follows live VS Code theme changes');
-    await checkEditorUI(frame!,replaceDocument, { read: async () => await vscode.env.clipboard.readText(), write: async text => { await vscode.env.clipboard.writeText(text); } });
+    await checkEditorUI(frame!, replaceDocument, async () => vscode.env.clipboard.readText());
     assert.ok(Object.keys(await frame!.evaluate(()=>window.VM_BOOT.codePalette)).length > 0, 'Code colors resolve from the active VS Code theme');
     const codeBefore=document.getText();
     await frame!.locator('.vm-code-language').selectOption('python');
@@ -169,7 +239,9 @@ export async function run() {
     const embeddedMap = frame!.locator('.vditor-ir .language-markmap svg');
     await embeddedMap.waitFor({ state: 'visible' });
     await embeddedMap.evaluate(svg => svg.scrollIntoView({ block: 'center' }));
-    await frame!.locator('.vm-markmap-resize').press('ArrowDown');
+    const resizeHandle = frame!.locator('.vm-markmap-resize');
+    await resizeHandle.waitFor({ state: 'visible' });
+    await resizeHandle.press('ArrowDown');
     await until(() => document.getText().includes('moye-markmap-height: 384'), 'Markmap height reaches the document');
     await vscode.commands.executeCommand('vditorMarkdown.save');
     await until(() => !document.isDirty, 'Save Markmap height');
@@ -203,7 +275,7 @@ export async function run() {
     await vscode.commands.executeCommand('vditorMarkdown.save');
     await until(()=>!richDocument.isDirty,'Save after custom keybinding');
     await frame!.page().screenshot({path:path.join(root,'.test-results','vscode-rich.png')});
-    await writeFile(path.join(root, '.test-results', 'integration-summary.json'), JSON.stringify({ passed: true, vscode: vscode.version, tests: ['real webview input', 'Ctrl+S', 'Ctrl+Z', 'Ctrl+Y', 'custom user keybinding', 'external document sync', 'save command', 'source command', 'no dirty-on-open', 'scrolling in IR/WYSIWYG/SV', 'fixed 16px toolbar', 'independent outline scrolling', 'hidden heading labels', 'code language/theme/copy/paste/delete', 'paste into code selection', 'code theme from VS Code', 'installed JSON/TextMate theme catalog', 'page/code theme dropdowns', 'Auto follows live VS Code themes', 'themed tables', 'automatic selection highlights', 'real mouse selection', 'undo code language and deletion', 'centered toolbar and settings dropdown', 'full-height outline resizing', 'fixed paper/custom widths and horizontal scrolling', 'six-dot paragraph/image menus', 'block conversion and editable columns/folds', 'block copy/cut/delete/add and list indentation', 'native undo/redo of paragraph deletion', 'hidden bottom document status', 'independent 1-8 color palettes and real drag sorting', 'palette persistence and defaults', 'dual selection color rows in all modes', 'annotation font size and scoped eraser', 'native undo/redo of eraser', 'centered fixed pages and responsive wide tables', 'one gutter for nested-list handles', 'rich-content CSP: KaTeX/Mermaid/Graphviz/ECharts'] }, null, 2));
+    await writeFile(path.join(root, '.test-results', 'integration-summary.json'), JSON.stringify({ passed: true, vscode: vscode.version, tests: ['real webview input', 'Ctrl+S', 'Ctrl+Z', 'Ctrl+Y', 'custom user keybinding', 'external document sync', 'save command', 'source command', 'no dirty-on-open', 'scrolling in IR/WYSIWYG/SV', 'fixed 16px toolbar', 'independent outline scrolling', 'hidden heading labels', 'code button order, word wrap, copy and delete', 'paste into code selection', 'code theme from VS Code', 'installed JSON/TextMate theme catalog', 'page/code theme dropdowns', 'Auto follows live VS Code themes', 'themed tables', 'automatic selection highlights', 'real mouse selection', 'undo code language and deletion', 'centered toolbar and settings dropdown', 'full-height outline resizing', 'fixed paper/custom widths and horizontal scrolling', 'six-dot paragraph/image menus', 'block conversion and editable columns/folds', 'block copy/cut/delete/add and list indentation', 'native undo/redo of paragraph deletion', 'hidden bottom document status', 'independent 1-8 color palettes and real drag sorting', 'palette persistence and defaults', 'dual selection color rows in all modes', 'annotation font size and scoped eraser', 'native undo/redo of eraser', 'centered fixed pages and responsive wide tables', 'one gutter for nested-list handles', 'rich-content CSP: KaTeX/Mermaid/Graphviz/ECharts'] }, null, 2));
     console.log('PASS real VS Code webview, save, undo/redo, source and external synchronization');
   } finally {
     await vscode.env.clipboard.writeText(originalClipboard);

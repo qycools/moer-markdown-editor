@@ -11,7 +11,8 @@ export const actions = [
   ['quote', '引用'], ['code', '代码块'], ['undo', '撤销'], ['redo', '重做'],
   ['search', '搜索'], ['shortcuts', '快捷键配置'], ['settings', '设置'],
 ] as const;
-export type Action = typeof actions[number][0];
+export const commands = [...actions, ['linkBack', '返回文档内链接起点']] as const;
+export type Action = typeof commands[number][0];
 export const defaultColors = ['#ffd400', '#ff6268', '#62ad2e', '#26a7df', '#a68be3', '#e46ae8', '#f49a35', '#aaaaaa'];
 export type ColorProperty = 'color' | 'background-color';
 export function validPalette(value: unknown): value is string[] {
@@ -38,9 +39,11 @@ export type Settings = typeof defaults;
 export type ThemeDefinition = {
   id: string; label: string; kind: 'light' | 'dark' | 'hc-light' | 'hc-dark';
   colors: Record<'bg' | 'fg' | 'panel' | 'border' | 'muted' | 'accent' | 'codeBg', string>;
+  listHover?: { background?: string; foreground?: string; outline?: string };
   tokens: Record<string, string>;
 };
 export type ThemeCatalog = { themes: ThemeDefinition[]; activeTheme: string };
+export type HistoryLocation = { action: 'undo' | 'redo'; offset: number };
 export type ExportOptions = {
   format: 'pdf' | 'html' | 'docx'; topMargin: number; toc: boolean; beautify: boolean;
   theme: boolean; paperSize: 'A4' | 'A3' | 'Letter'; font: string; fontSize: number; directory: string;

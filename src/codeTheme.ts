@@ -103,6 +103,11 @@ export function themeCatalog(): ThemeCatalog {
           muted: color(['descriptionForeground'], isDark ? '#9d9d9d' : '#717171'), accent: color(['focusBorder', 'textLink.foreground'], '#0078d4'),
           codeBg: color(['textCodeBlock.background', 'editor.background'], isDark ? '#2b2b2b' : '#f6f8fa'),
         },
+        listHover: {
+          background: color(['list.hoverBackground'], ''),
+          foreground: color(['list.hoverForeground'], ''),
+          outline: color(['contrastActiveBorder'], ''),
+        },
         tokens: {},
       };
       const custom = customizations('editor.tokenColorCustomizations', [contribution.id, display].filter(Boolean));

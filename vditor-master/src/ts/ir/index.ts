@@ -157,6 +157,14 @@ class IR {
                     range.startContainer, "vditor-ir__preview");
             }
             if (previewElement) {
+                if (vditor.options.preview.editOnDoubleClick && event.detail !== 2) {
+                    expandMarker(range, vditor);
+                    highlightToolbarIR(vditor);
+                    return;
+                }
+                if (vditor.options.preview.editOnDoubleClick) {
+                    previewElement.parentElement.classList.add("vditor-ir__node--expand");
+                }
                 if (previewElement.previousElementSibling.firstElementChild) {
                     range.selectNodeContents(previewElement.previousElementSibling.firstElementChild);
                 } else {
@@ -185,6 +193,7 @@ class IR {
                 } else if (vditor.options.link.isOpen) {
                     window.open(aElement.querySelector(":scope > .vditor-ir__marker--link").textContent);
                 }
+                highlightToolbarIR(vditor);
                 return;
             }
 

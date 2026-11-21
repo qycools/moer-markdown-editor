@@ -2,16 +2,21 @@ import * as vscode from 'vscode';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { expandHome } from './browser';
-import { actions, APP_NAME, defaults, escapeHTML, minimalEdit, PREFIX, VIEW_TYPE, type Settings, validateExport, validPageWidth, validPalette } from './shared';
+import { commands, APP_NAME, defaults, escapeHTML, minimalEdit, PREFIX, VIEW_TYPE, type HistoryLocation, type Settings, validateExport, validPageWidth, validPalette } from './shared';
 import { exportDocument } from './export';
 import { themeCatalog, clearThemeCache } from './codeTheme';
 import { localImageData } from './localImages';
 
-type Session = { panel: vscode.WebviewPanel; document: vscode.TextDocument; queue: Promise<void>; applying: boolean; id: string; dialogOpen: boolean };
+type Session = { panel: vscode.WebviewPanel; document: vscode.TextDocument; queue: Promise<void>; applying: boolean; id: string; dialogOpen: boolean; canGoBack: boolean };
 const sessions = new Set<Session>();
 let active: Session | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
+  const setActive = (session?: Session) => {
+    active = session;
+    void vscode.commands.executeCommand('setContext', 'vditorMarkdown.dialogOpen', session?.dialogOpen ?? false);
+    void vscode.commands.executeCommand('setContext', 'vditorMarkdown.canGoBack', session?.canGoBack ?? false);
+  };
   const settings = (uri?: vscode.Uri): Settings => {
     const config = vscode.workspace.getConfiguration(PREFIX, uri);
     return Object.fromEntries(Object.entries(defaults).map(([key, value]) => [key, config.get(key, value)])) as Settings;
@@ -26,8 +31,9 @@ export function activate(context: vscode.ExtensionContext) {
   };
   const provider: vscode.CustomTextEditorProvider = {
     async resolveCustomTextEditor(document, panel) {
-      const session: Session = { document, panel, queue: Promise.resolve(), applying: false, id: randomBytes(8).toString('hex'), dialogOpen: false };
-      sessions.add(session); active = session;
+      const session: Session = { document, panel, queue: Promise.resolve(), applying: false, id: randomBytes(8).toString('hex'), dialogOpen: false, canGoBack: false };
+      sessions.add(session);
+      if (panel.active) setActive(session);
       const documentDirectory = vscode.Uri.joinPath(document.uri, '..');
       const imageRoots = [documentDirectory, ...(vscode.workspace.workspaceFolders || []).map(f => f.uri)];
       const roots = [context.extensionUri, ...imageRoots];
@@ -36,12 +42,15 @@ export function activate(context: vscode.ExtensionContext) {
       panel.webview.html = webviewHTML(panel.webview, context, document, settings(document.uri));
       const disposables = [
         panel.onDidChangeViewState(() => {
-          if (panel.active) { active = session; void vscode.commands.executeCommand('setContext', 'vditorMarkdown.dialogOpen', session.dialogOpen); }
-          else if (active === session) active = undefined;
+          if (panel.active) setActive(session);
+          else if (active === session) setActive();
         }),
         vscode.workspace.onDidChangeTextDocument(e => {
           if (e.document.uri.toString() === document.uri.toString() && !session.applying) {
-            void panel.webview.postMessage({ type: 'document', text: document.getText(), version: document.version });
+            const action = e.reason === vscode.TextDocumentChangeReason.Undo ? 'undo' : e.reason === vscode.TextDocumentChangeReason.Redo ? 'redo' : undefined;
+            const offset = e.contentChanges.reduce((first, change) => Math.min(first, change.rangeOffset), Infinity);
+            const history: HistoryLocation | undefined = action && Number.isFinite(offset) ? { action, offset } : undefined;
+            void panel.webview.postMessage({ type: 'document', text: document.getText(), version: document.version, history });
           }
         }),
         panel.webview.onDidReceiveMessage(message => {
@@ -54,7 +63,7 @@ export function activate(context: vscode.ExtensionContext) {
           else session.queue = session.queue.then(handle);
         }),
       ];
-      panel.onDidDispose(() => { sessions.delete(session); if (active === session) { active = undefined; void vscode.commands.executeCommand('setContext', 'vditorMarkdown.dialogOpen', false); } disposables.forEach(d => d.dispose()); });
+      panel.onDidDispose(() => { sessions.delete(session); if (active === session) setActive(); disposables.forEach(d => d.dispose()); });
       async function handleMessage(message: any, s: Session) {
         if (!message || typeof message.type !== 'string') return;
         const reply = (value: unknown) => panel.webview.postMessage({ type: 'result', requestId: message.requestId, value });
@@ -94,7 +103,6 @@ export function activate(context: vscode.ExtensionContext) {
             await vscode.commands.executeCommand(message.type); break;
           case 'shortcuts':
             await vscode.commands.executeCommand('workbench.action.openGlobalKeybindings', `@ext:${context.extension.id}`); break;
-          case 'clipboardRead': await reply(await vscode.env.clipboard.readText()); break;
           case 'clipboardWrite':
             if (typeof message.text !== 'string') throw new Error('剪贴板内容无效。');
             await vscode.env.clipboard.writeText(message.text); await reply(true); break;
@@ -104,6 +112,10 @@ export function activate(context: vscode.ExtensionContext) {
           case 'dialog':
             s.dialogOpen = !!message.open;
             if (panel.active) await vscode.commands.executeCommand('setContext', 'vditorMarkdown.dialogOpen', s.dialogOpen); break;
+          case 'linkHistory':
+            s.canGoBack = message.canGoBack === true;
+            if (panel.active) await vscode.commands.executeCommand('setContext', 'vditorMarkdown.canGoBack', s.canGoBack);
+            break;
           case 'setting': {
             if (!(message.key in defaults) || typeof message.value !== typeof defaults[message.key as keyof Settings]) throw new Error('设置项无效。');
             if (message.key === 'browserPath' && !vscode.workspace.isTrusted) throw new Error('请先信任工作区再配置浏览器。');
@@ -185,12 +197,19 @@ export function activate(context: vscode.ExtensionContext) {
             await reply(`assets/${filename}`); break;
           }
           case 'openLink': {
-            if (typeof message.href !== 'string') return;
-            const parsed = vscode.Uri.parse(message.href);
-            if (['http', 'https', 'mailto'].includes(parsed.scheme)) await vscode.env.openExternal(parsed);
-            else if (parsed.scheme === 'file' || !parsed.scheme) {
-              const uri = parsed.scheme ? parsed : vscode.Uri.file(path.resolve(sourceDirFor(document), decodeURIComponent(message.href.split('#')[0])));
-              await vscode.commands.executeCommand('vscode.open', uri);
+            if (typeof message.href !== 'string' || !message.href) return;
+            const href = message.href;
+            const scheme = /^[a-z][a-z\d+.-]*:/i.exec(href)?.[0].toLowerCase();
+            if (scheme === 'http:' || scheme === 'https:' || scheme === 'mailto:' || href.startsWith('//')) {
+              await vscode.env.openExternal(vscode.Uri.parse(href.startsWith('//') ? `https:${href}` : href));
+            } else if (scheme === 'file:') await vscode.commands.executeCommand('vscode.open', vscode.Uri.parse(href));
+            else if (!scheme || (process.platform === 'win32' && /^[a-z]:[\\/]/i.test(href))) {
+              const parts = vscode.Uri.parse(href);
+              const spelling = href.split(/[?#]/, 1)[0];
+              let filename = spelling;
+              try { filename = decodeURIComponent(spelling); } catch { /* A literal percent is valid in a filename. */ }
+              const target = vscode.Uri.file(path.resolve(sourceDirFor(document), filename)).with({ fragment: parts.fragment, query: parts.query });
+              await vscode.commands.executeCommand('vscode.open', target);
             }
             break;
           }
@@ -203,7 +222,7 @@ export function activate(context: vscode.ExtensionContext) {
     const target = uri || vscode.window.activeTextEditor?.document.uri || active?.document.uri;
     if (target) await vscode.commands.executeCommand('vscode.openWith', target, VIEW_TYPE);
   }));
-  for (const [id] of actions) context.subscriptions.push(vscode.commands.registerCommand(`${PREFIX}.${id}`, async () => {
+  for (const [id] of commands) context.subscriptions.push(vscode.commands.registerCommand(`${PREFIX}.${id}`, async () => {
     if (active) await active.panel.webview.postMessage({ type: 'command', action: id });
   }));
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => { if ([PREFIX, 'workbench.colorTheme', 'workbench.colorCustomizations', 'editor.tokenColorCustomizations'].some(key => e.affectsConfiguration(key))) for (const session of sessions) void sendConfig(session); }));

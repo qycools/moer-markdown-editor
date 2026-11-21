@@ -2,6 +2,7 @@ import { processCodeRender } from '@local/code';
 import { icon } from './icons';
 import { viewportLayer } from './viewportLayer';
 import { canEditImage } from './imageTools';
+import { headingSelector } from './mindmap';
 
 const types = [['p', '文本'], ['ordered-list', '有序列表'], ['list', '无序列表'], ['check', '任务列表'], ['code', '代码块'], ['callout', '高亮块'], ['quote', '引用'], ['columns', '分栏'], ['fold', '折叠块']];
 const typeIcons: Record<string, string> = { p: 'headings', 'ordered-list': 'ordered-list', list: 'list', check: 'check', code: 'code', callout: 'backgroundColor', quote: 'quote', columns: 'columns', fold: 'fold' };
@@ -9,6 +10,7 @@ const typeIcons: Record<string, string> = { p: 'headings', 'ordered-list': 'orde
 export function installBlockMenus(editor: any, options: { submit: () => void; rpc: (type: string, data?: object) => Promise<any>; toast: (text: string, error?: boolean) => void; beforeOpen: () => void; menuState: (open: boolean) => void; openProperties: (block: HTMLElement) => void }) {
   const handles = new Map<HTMLElement, HTMLButtonElement>(), layers = new Map<HTMLElement, HTMLElement>();
   let menu: HTMLElement | undefined, activeBlock: HTMLElement | undefined, scheduled = false;
+  let hoveredHeading: HTMLButtonElement | undefined;
   const surface = () => editor.vditor.currentMode === 'sv' ? undefined : editor.vditor[editor.vditor.currentMode].element as HTMLElement;
   function close() {
     const wasOpen = !!menu;
@@ -149,19 +151,37 @@ export function installBlockMenus(editor: any, options: { submit: () => void; rp
     for (const [block, handle] of handles) if (!current.has(block)) { handle.remove(); handles.delete(block); }
     if (activeBlock && !activeBlock.isConnected) close(); if (!root) return;
     const { layer, origin } = viewportLayer(root.parentElement!, layers, 'vm-block-layer');
-    const gutter = Math.max(4, root.getBoundingClientRect().left - origin.left + parseFloat(getComputedStyle(root).paddingLeft) - 27);
+    const gutter = Math.max(22, root.getBoundingClientRect().left - origin.left + parseFloat(getComputedStyle(root).paddingLeft) - 27);
     for (const block of blocks) {
       if (block.tagName === 'WBR' || !block.getClientRects().length) continue;
       let handle = handles.get(block);
-      if (!handle) { handle = document.createElement('button'); handle.className = 'vm-block-handle'; handle.type = 'button'; handle.setAttribute('aria-label', '段落操作'); handle.setAttribute('aria-haspopup', 'menu'); handle.innerHTML = icon('grip'); handle.onpointerdown = event => event.preventDefault(); handle.onclick = () => open(block, handle!); handles.set(block, handle); layer.append(handle); }
+      if (!handle) {
+        handle = document.createElement('button'); handle.className = 'vm-block-handle'; handle.type = 'button';
+        const heading = block.matches(headingSelector) ? block.tagName : '';
+        if (heading) handle.dataset.headingLevel = heading;
+        handle.setAttribute('aria-label', heading ? `${heading} 段落操作` : '段落操作');
+        handle.setAttribute('aria-haspopup', 'menu'); handle.innerHTML = icon('grip');
+        handle.onpointerdown = event => event.preventDefault(); handle.onclick = () => open(block, handle!);
+        handles.set(block, handle); layer.append(handle);
+      }
       const rect = block.getBoundingClientRect(); handle.style.transform = `translate(${gutter}px,${rect.top - origin.top + 2}px)`;
       handle.hidden = rect.bottom < origin.top || rect.top > origin.bottom;
     }
   }
   function schedule() { if (!scheduled) { scheduled = true; requestAnimationFrame(refresh); } }
+  function hover(target: EventTarget | null) {
+    const heading = target instanceof Element ? target.closest<HTMLElement>(headingSelector) : null;
+    const handle = heading ? handles.get(heading) : undefined;
+    if (handle === hoveredHeading) return;
+    hoveredHeading?.removeAttribute('data-heading-hover');
+    hoveredHeading = handle;
+    handle?.setAttribute('data-heading-hover', '');
+  }
   const observer = new MutationObserver(schedule);
   for (const mode of ['ir', 'wysiwyg']) {
     const root = editor.vditor[mode].element as HTMLElement; observer.observe(root, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['style', 'class'] });
+    root.addEventListener('pointerover', event => hover(event.target));
+    root.addEventListener('pointerout', event => hover(event.relatedTarget));
     root.addEventListener('scroll', schedule, { passive: true }); root.parentElement!.addEventListener('scroll', schedule, { passive: true }); new ResizeObserver(schedule).observe(root);
   }
   document.addEventListener('pointerdown', event => { if (menu && !menu.contains(event.target as Node) && !(event.target as Element).closest('.vm-block-handle')) close(); });

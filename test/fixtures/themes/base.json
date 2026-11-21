@@ -4,7 +4,9 @@
     "sideBar.background": "#f0ead9", "widget.border": "#d7d5c9",
     "focusBorder": "#00c5df", "descriptionForeground": "#8b9999", "textCodeBlock.background": "#f0ecdd",
     "textLink.foreground": "#006ab1", "textLink.activeForeground": "#004f84", "icon.foreground": "#424242",
-    "toolbar.hoverBackground": "#b8b8b850", "toolbar.activeBackground": "#a6a6a650", "actionBar.toggledBackground": "#dddddd"
+    "list.hoverBackground": "#e8e8e8",
+    "toolbar.hoverBackground": "#b8b8b850", "toolbar.activeBackground": "#a6a6a650", "actionBar.toggledBackground": "#dddddd",
+    "inputOption.activeBackground": "#bed6ed", "inputOption.activeBorder": "#005fb8", "inputOption.activeForeground": "#000000"
   },
   "tokenColors": [
     { "scope": "keyword", "settings": { "foreground": "#9c27b0" } },

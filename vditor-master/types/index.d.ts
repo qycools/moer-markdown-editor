@@ -548,6 +548,7 @@ interface IMarkdownConfig {
 
 /** @link https://ld246.com/article/1549638745630#options-preview */
 interface IPreview {
+    editOnDoubleClick?: boolean;
     /** 预览 debounce 毫秒间隔。默认值: 1000 */
     delay?: number;
     /** 预览区域最大宽度。默认值: 768 */

@@ -24,7 +24,7 @@ import search from '@vscode/codicons/src/icons/search.svg';
 import shortcuts from '@vscode/codicons/src/icons/record-keys.svg';
 import settings from '@vscode/codicons/src/icons/settings-gear.svg';
 import copy from '@vscode/codicons/src/icons/copy.svg';
-import paste from '@vscode/codicons/src/icons/clippy.svg';
+import wrap from '@vscode/codicons/src/icons/word-wrap.svg';
 import trash from '@vscode/codicons/src/icons/trash.svg';
 import grip from '@vscode/codicons/src/icons/gripper.svg';
 import cut from '@vscode/codicons/src/icons/screen-cut.svg';
@@ -35,5 +35,5 @@ import columns from '@vscode/codicons/src/icons/split-horizontal.svg';
 import fold from '@vscode/codicons/src/icons/fold.svg';
 const eraser = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 5 5a2 2 0 0 1 0 3L11 21H6l-4-4a2 2 0 0 1 0-3L13 3a2 2 0 0 1 3 0Z"/><path d="m7 9 8 8M10 21h11"/></svg>';
 
-const icons: Record<string, string> = { outline, mindmap, source, save, headings, bold, italic, strike, link, textColor, backgroundColor, export: exportIcon, theme, brightness, list, 'ordered-list': orderedList, check, table, quote, code, undo, redo, search, shortcuts, settings, copy, paste, trash, grip, cut, indent, add, convert, columns, fold, eraser };
+const icons: Record<string, string> = { outline, mindmap, source, save, headings, bold, italic, strike, link, textColor, backgroundColor, export: exportIcon, theme, brightness, list, 'ordered-list': orderedList, check, table, quote, code, undo, redo, search, shortcuts, settings, copy, wrap, trash, grip, cut, indent, add, convert, columns, fold, eraser };
 export const icon = (id: string) => (icons[id] || settings).replace('<svg ', '<svg aria-hidden="true" focusable="false" ');

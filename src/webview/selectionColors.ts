@@ -1,9 +1,8 @@
 import type { ColorProperty } from '../shared';
+import { textareaMirror } from './textareaMirror';
 
 function textareaRect(surface: HTMLTextAreaElement): DOMRect {
-  const mirror = document.createElement('div'), style = getComputedStyle(surface), rect = surface.getBoundingClientRect();
-  for (const key of ['font', 'lineHeight', 'letterSpacing', 'padding', 'border', 'boxSizing', 'wordBreak', 'tabSize'] as const) mirror.style[key] = style[key];
-  Object.assign(mirror.style, { position: 'fixed', left: '-10000px', top: '0', width: `${surface.clientWidth}px`, whiteSpace: 'pre-wrap', overflowWrap: 'break-word' });
+  const mirror = textareaMirror(surface), style = getComputedStyle(surface), rect = surface.getBoundingClientRect();
   mirror.textContent = surface.value.slice(0, surface.selectionEnd);
   const marker = document.createElement('span'); marker.textContent = '\u200b'; mirror.append(marker); document.body.append(mirror);
   const point = new DOMRect(rect.left + marker.offsetLeft - surface.scrollLeft, rect.top + marker.offsetTop - surface.scrollTop, 1, parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.7);
@@ -30,9 +29,10 @@ export function installSelectionColors(options: {
   function update() {
     if (dragging || options.blocked()) { hide(); return; }
     const surface = options.surface(); if (!surface) { hide(); return; }
+    if (!surface.contains(document.activeElement)) { hide(); return; }
     let rect: DOMRect;
     if (surface instanceof HTMLTextAreaElement) {
-      if (document.activeElement !== surface || surface.selectionStart === surface.selectionEnd || !surface.value.slice(surface.selectionStart, surface.selectionEnd).trim()) { hide(); return; }
+      if (surface.selectionStart === surface.selectionEnd || !surface.value.slice(surface.selectionStart, surface.selectionEnd).trim()) { hide(); return; }
       const prefix = surface.value.slice(0, surface.selectionStart);
       const fence = /^\s*(?:>\s*)*(?:```|~~~)/m;
       if (prefix.split('\n').filter(line => fence.test(line)).length % 2 || fence.test(surface.value.slice(surface.selectionStart, surface.selectionEnd))) { hide(); return; }

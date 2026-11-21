@@ -7,6 +7,13 @@ declare module '@local/mode' {
 }
 declare module '*.svg' { const svg: string; export default svg; }
 declare module '@local/code' { export function processCodeRender(element: HTMLElement, vditor: any): void; }
+declare module 'diff-match-patch' {
+  export default class DiffMatchPatch {
+    Diff_Timeout: number;
+    diff_main(before: string, after: string, checkLines?: boolean): [number, string][];
+    diff_xIndex(diffs: [number, string][], index: number): number;
+  }
+}
 interface Window {
   acquireVsCodeApi?: () => { postMessage(message: unknown): void; getState(): any; setState(state: unknown): void };
   VM_BOOT: any;

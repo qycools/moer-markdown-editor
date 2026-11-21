@@ -1,21 +1,26 @@
 import Vditor from '@local/vditor';
 import { setEditMode } from '@local/mode';
 import { processCodeRender } from '@local/code';
-import { actions, defaults, defaultColors, escapeHTML as esc, exportDefaults, pageWidths, pageWidthPixels, validPageWidth, validPalette, type ColorProperty, type Action, type ExportOptions, type Settings, type ThemeCatalog } from '../shared';
+import { actions, defaults, defaultColors, escapeHTML as esc, exportDefaults, pageWidths, pageWidthPixels, validPageWidth, validPalette, type ColorProperty, type Action, type ExportOptions, type HistoryLocation, type Settings, type ThemeCatalog } from '../shared';
 import { editTextStyles } from './colors';
 import { icon } from './icons';
 import { installCodeBlocks } from './codeBlocks';
 import { installThemeMenu, isDarkTheme, themeSelectOptions } from './themes';
 import { installSelectionColors } from './selectionColors';
 import { installOutlineResize } from './outlineResize';
+import { installOutline } from './outline';
+import { installLinks } from './links';
+import { formatInline, type InlineFormat } from './inlineFormatting';
+import { normalizeMarkdown, selectMarkdownRange } from './documentPositions';
 import { installBlockMenus } from './blocks';
 import { installStructures } from './structures';
 import { installColorMenus } from './colorMenus';
 import { installToolbarState } from './toolbarState';
+import { installSearch } from './search';
 import { installContentAdapter, templateFor } from './contentMarkup';
 import { installContentTools } from './contentTools';
 import { installLocalImageFallback } from './imageTools';
-import { buildMindmap, headingSelector, mindmapSvg } from './mindmap';
+import { buildMindmap, mindmapSvg } from './mindmap';
 import './style.css';
 import './tables.css';
 import './contentTools.css';
@@ -28,15 +33,18 @@ let codeBlocks: ReturnType<typeof installCodeBlocks> | undefined;
 let catalog: ThemeCatalog = { themes: boot.themes || [], activeTheme: boot.activeTheme || '' };
 let selectionColors: ReturnType<typeof installSelectionColors> | undefined;
 let outlineResize: ReturnType<typeof installOutlineResize> | undefined;
+let outlineState: ReturnType<typeof installOutline> | undefined;
+let links: ReturnType<typeof installLinks> | undefined;
 let blockMenus: ReturnType<typeof installBlockMenus> | undefined;
 let structures: ReturnType<typeof installStructures> | undefined;
 let colorMenus: ReturnType<typeof installColorMenus> | undefined;
 let toolbarState: ReturnType<typeof installToolbarState> | undefined;
+let search: ReturnType<typeof installSearch> | undefined;
 let contentTools: ReturnType<typeof installContentTools> | undefined;
 let mindmapPreview: AbortController | undefined;
 let toastTimer = 0;
 let savedRange: Range | undefined, savedTextarea: [number, number] | undefined, previousFocus: HTMLElement | null = null;
-let exportOptions: ExportOptions = { ...exportDefaults }, searchIndex = -1;
+let exportOptions: ExportOptions = { ...exportDefaults };
 const pending = new Set<number>();
 const requests = new Map<string, { resolve: (value: any) => void; reject: (error: Error) => void }>();
 const pendingSettings = new Map<keyof Settings, { value: any }>();
@@ -51,6 +59,7 @@ document.getElementById('app')!.prepend(toolbar);
 const nativeTools = ['headings', 'bold', 'italic', 'strike', 'link', 'list', 'ordered-list', 'check', 'table', 'quote', 'code', 'undo', 'redo', 'emoji', 'line', 'inline-code', 'outdent', 'indent', 'preview', 'code-theme', 'content-theme'];
 toolbar.querySelector('[data-action=mindmap]')!.setAttribute('aria-haspopup', 'dialog');
 toolbar.querySelector('[data-action=theme]')!.setAttribute('aria-haspopup', 'menu');
+toolbar.querySelector('[data-action=search]')!.setAttribute('aria-controls', 'search-bar');
 const themeMenu = installThemeMenu({ catalog: () => catalog, current: target => catalog.themes.some(theme => theme.id === settings[target]) ? settings[target] : 'auto', choose: (target, id) => { void changeSetting(target, id); }, beforeOpen: () => { if (overlay.querySelector('#settings-menu')) closeDialog(false); colorMenus?.close(); blockMenus?.close(); rememberSelection(); selectionColors?.hide(); } });
 
 function post(type: string, data: object = {}) { bridge.postMessage({ type, ...data }); }
@@ -63,17 +72,19 @@ function toast(text: string, error = false) {
   toastTimer = window.setTimeout(() => { status.hidden = true; }, error ? 6000 : 2500);
 }
 function getValue(): string { return editor.getValue().replace(/\r?\n/g, eol); }
-function submit() {
+function submit(source?: string) {
   if (!initialized || suppress) return;
-  const text = getValue();
-  if (text === baseline) return;
-  baseline = text;
+  search?.refresh(); toolbarState?.refresh();
+  const rendered = getValue();
+  if (source === undefined && rendered === baseline) return;
+  baseline = rendered;
+  const text = source === undefined ? rendered : source.replace(/\r?\n/g, eol);
   if (text === lastSent) return;
   const baseText = lastSent; lastSent = text; seq++; pending.add(seq);
   post('edit', { text, baseText, seq, version });
-  updateStatus(); updateOutline();
+  updateStatus(); outlineState?.render();
 }
-function applyDocument(text: string, nextVersion: number) {
+function applyDocument(text: string, nextVersion: number, history?: HistoryLocation) {
   selectionColors?.hide(); themeMenu.close(); blockMenus?.close(); colorMenus?.close(); contentTools?.close();
   eol = text.includes('\r\n') ? '\r\n' : '\n';
   const surface = getSurface(); const scrollTop = surface?.scrollTop || 0;
@@ -81,8 +92,19 @@ function applyDocument(text: string, nextVersion: number) {
   editor.setValue(text, true);
   baseline = getValue(); lastSent = text; version = nextVersion; pending.clear();
   suppress = false;
-  if (surface) surface.scrollTop = scrollTop;
-  updateOutline(); updateStatus();
+  if (surface) {
+    surface.scrollTop = scrollTop;
+    if (history) {
+      const markdown = normalizeMarkdown(text);
+      const offset = normalizeMarkdown(text.slice(0, history.offset)).length;
+      surface.focus({ preventScroll: true });
+      selectMarkdownRange(surface, markdown, markdownToEditorDOM, offset, offset, true);
+      rememberSelection();
+      toast(history.action === 'undo' ? '已撤销' : '已重做');
+    }
+  }
+  outlineState?.render(); updateStatus();
+  search?.refresh(); toolbarState?.refresh();
 }
 function updateStatus() {
   toolbar.querySelector('[data-action=save]')?.setAttribute('aria-busy', String(!!pending.size));
@@ -97,13 +119,34 @@ function rememberSelection() {
 function restoreSelection() {
   const surface = getSurface(); surface?.focus();
   if (surface instanceof HTMLTextAreaElement && savedTextarea) surface.setSelectionRange(...savedTextarea);
-  else if (savedRange?.startContainer.isConnected) { const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(savedRange); }
+  else if (savedRange && surface?.contains(savedRange.commonAncestorContainer)) { const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(savedRange); }
 }
 function nativeAction(id: string, selector?: string) {
   restoreSelection();
   const root = editor.vditor.toolbar.elements[id] as HTMLElement;
   root?.querySelector(selector || 'button')?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
   setTimeout(submit, 30);
+}
+function markdownToEditorDOM(text: string): string {
+  const { currentMode, lute } = editor.vditor;
+  return currentMode === 'ir' ? lute.Md2VditorIRDOM(text) : lute.Md2VditorDOM(text);
+}
+function applyInlineFormat(id: InlineFormat) {
+  rememberSelection(); restoreSelection();
+  const surface = getSurface()!;
+  const current = getValue(), markdown = normalizeMarkdown(current === baseline ? lastSent : current);
+  const { currentMode, lute } = editor.vditor;
+  const toMarkdown = currentMode === 'ir' ? lute.VditorIRDOM2Md : lute.VditorDOM2Md;
+  const edit = formatInline(surface, id, markdown, toMarkdown, markdownToEditorDOM);
+  if (edit) {
+    const top = surface.scrollTop, left = surface.scrollLeft;
+    editor.setValue(edit.text);
+    surface.scrollTop = top; surface.scrollLeft = left;
+    selectMarkdownRange(surface, edit.text, markdownToEditorDOM, edit.start, edit.end);
+    submit(edit.text);
+  }
+  rememberSelection();
+  toolbarState?.refresh();
 }
 function applySettings() {
   const selected = catalog.themes.find(theme => theme.id === settings.theme);
@@ -119,6 +162,11 @@ function applySettings() {
     document.documentElement.style.removeProperty(`--${key}`);
     if (selected) document.documentElement.style.setProperty(`--${key}`, selected.colors[key]);
   }
+  const outlineTheme = selected?.id !== catalog.activeTheme ? selected : undefined;
+  const style = document.documentElement.style;
+  style.setProperty('--outline-hover-background', outlineTheme ? outlineTheme.listHover?.background || 'var(--outline-hover-default)' : '');
+  style.setProperty('--outline-hover-foreground', outlineTheme ? outlineTheme.listHover?.foreground || outlineTheme.colors.fg : '');
+  style.setProperty('--outline-hover-outline', outlineTheme ? outlineTheme.listHover?.outline || 'transparent' : '');
   document.documentElement.style.removeProperty('--code-bg'); document.documentElement.style.removeProperty('--code-fg');
   if (code) { document.documentElement.style.setProperty('--code-bg', code.colors.codeBg); document.documentElement.style.setProperty('--code-fg', code.colors.fg); }
   const codePalette = (code || activeTheme)?.tokens || boot.codePalette || {};
@@ -148,13 +196,11 @@ function applySettings() {
     contentTools?.close();
     submit(); const text = editor.getValue(); suppress = true;
     setEditMode(editor.vditor, settings.mode, text); baseline = getValue(); suppress = false;
-    updateOutline(); updateStatus();
+    outlineState?.render(); updateStatus();
   }
-  codeBlocks?.refresh(); blockMenus?.refresh(); structures?.refresh(); selectionColors?.refresh(); colorMenus?.refresh(); toolbarState?.refresh();
-}
-function headings() {
-  const root = templateFor(editor.vditor.lute.Md2HTML(editor.getValue())).content;
-  return [...root.querySelectorAll(headingSelector)];
+  outlineState?.refresh();
+  links?.refresh();
+  codeBlocks?.refresh(); blockMenus?.refresh(); structures?.refresh(); selectionColors?.refresh(); colorMenus?.refresh(); toolbarState?.refresh(); search?.refresh();
 }
 function showMindmap() {
   const root = templateFor(editor.vditor.lute.Md2HTML(editor.getValue())).content;
@@ -225,25 +271,6 @@ function showMindmap() {
     submit();
   };
 }
-function updateOutline() {
-  const outline = document.getElementById('outline'); if (!outline) return;
-  const list = headings();
-  outline.innerHTML = `<div class="outline-title">文档大纲 <span>${list.length}</span></div>${list.length ? list.map((h, i) => `<button data-heading="${i}" style="--level:${Number(h.tagName.slice(1))}">${esc(h.textContent || '未命名标题')}</button>`).join('') : '<p class="muted">使用标题组织文档</p>'}`;
-}
-function navigateHeading(index: number) {
-  const surface = getSurface()!;
-  if (surface instanceof HTMLTextAreaElement) {
-    let fenced = false, count = -1, offset = 0;
-    const lines = surface.value.split('\n');
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
-      const heading = /^\s{0,3}(?:>\s*)*#{1,6}\s/.test(line) || (line.trim() && /^\s{0,3}(?:=+|-+)\s*$/.test(lines[i + 1] || ''));
-      if (!fenced && heading && ++count === index) { surface.focus(); surface.setSelectionRange(offset, offset + line.length); surface.scrollTop = Math.max(0, surface.value.slice(0, offset).split('\n').length * settings.editorFontSize * settings.lineHeight - 80); return; }
-      offset += line.length + 1;
-    }
-  } else surface.querySelectorAll('h1,h2,h3,h4,h5,h6')[index]?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-}
 function disposeMindmapPreview() {
   mindmapPreview?.abort();
   mindmapPreview = undefined;
@@ -261,7 +288,7 @@ function showDialog(title: string, body: string, footer = '', wide = false) {
 function closeDialog(restoreFocus: boolean | Event = true) {
   if (overlay.querySelector('[data-export-running]')) return;
   disposeMindmapPreview();
-  overlay.innerHTML = ''; toolbar.querySelector('[data-action=settings]')!.setAttribute('aria-expanded', 'false'); post('dialog', { open: false }); if (restoreFocus !== false) previousFocus?.focus();
+  overlay.innerHTML = ''; toolbar.querySelector('[data-action=settings]')!.setAttribute('aria-expanded', 'false'); post('dialog', { open: false }); if (restoreFocus !== false) previousFocus?.focus({ preventScroll: true });
 }
 function showSettingsMenu(body: string) {
   disposeMindmapPreview();
@@ -415,50 +442,6 @@ function showExport() {
     finally { delete button.dataset.exportRunning; button.disabled = false; button.textContent = '导出'; }
   };
 }
-function showSearch() {
-  let bar = document.getElementById('search-bar');
-  if (!bar) {
-    bar = document.createElement('div'); bar.id = 'search-bar';
-    bar.innerHTML = '<input id="search-input" type="search" placeholder="搜索当前文档" aria-label="搜索当前文档"><label><input type="checkbox" id="search-case">Aa</label><output id="search-count">0 项</output><button id="search-prev" aria-label="上一处">↑</button><button id="search-next" aria-label="下一处">↓</button><button id="search-close" aria-label="关闭搜索">×</button>';
-    toolbar.after(bar);
-    bar.querySelector('#search-input')!.addEventListener('input', () => { searchIndex = -1; findText(1); });
-    bar.querySelector('#search-case')!.addEventListener('change', () => { searchIndex = -1; findText(1); });
-    bar.querySelector('#search-prev')!.addEventListener('click', () => findText(-1));
-    bar.querySelector('#search-next')!.addEventListener('click', () => findText(1));
-    bar.querySelector('#search-close')!.addEventListener('click', () => { (CSS as any).highlights?.delete('vm-find'); bar!.remove(); });
-    bar.querySelector('#search-input')!.addEventListener('keydown', e => { const key = e as KeyboardEvent; if (key.key === 'Enter') { key.preventDefault(); findText(key.shiftKey ? -1 : 1); } if (key.key === 'Escape') { bar!.remove(); getSurface()?.focus(); } });
-  }
-  bar.querySelector<HTMLInputElement>('input')!.focus();
-}
-function findText(direction: number) {
-  const query = (document.getElementById('search-input') as HTMLInputElement).value;
-  const matchCase = (document.getElementById('search-case') as HTMLInputElement).checked;
-  const surface = getSurface()!, nodes: Text[] = []; let text = '';
-  if (surface instanceof HTMLTextAreaElement) text = surface.value;
-  else {
-    const walker = document.createTreeWalker(surface, NodeFilter.SHOW_TEXT, { acceptNode(node) {
-      const parent = node.parentElement!;
-      if (!parent.getClientRects().length || parent.closest('.vm-color-token,.vditor-ir__marker,.vditor-wysiwyg__pre,.vditor-ir__marker--pre,script,style')) return NodeFilter.FILTER_REJECT;
-      return NodeFilter.FILTER_ACCEPT;
-    } });
-    let node; while ((node = walker.nextNode())) { nodes.push(node as Text); text += node.textContent; }
-  }
-  const haystack = matchCase ? text : text.toLocaleLowerCase(), needle = matchCase ? query : query.toLocaleLowerCase();
-  const matches: number[] = [];
-  if (needle) { let at = haystack.indexOf(needle); while (at >= 0) { matches.push(at); at = haystack.indexOf(needle, at + Math.max(1, needle.length)); } }
-  searchIndex = matches.length ? (searchIndex + direction + matches.length) % matches.length : -1;
-  document.getElementById('search-count')!.textContent = `${searchIndex < 0 ? 0 : searchIndex + 1} / ${matches.length}`;
-  (CSS as any).highlights?.delete('vm-find');
-  if (searchIndex < 0) return;
-  const start = matches[searchIndex], end = start + query.length;
-  if (surface instanceof HTMLTextAreaElement) { surface.setSelectionRange(start, end); surface.scrollTop = Math.max(0, text.slice(0, start).split('\n').length * settings.editorFontSize * settings.lineHeight - surface.clientHeight / 2); }
-  else {
-    const range = document.createRange(); let offset = 0, started = false;
-    for (const node of nodes) { const next = offset + node.length; if (!started && start < next) { range.setStart(node, start - offset); started = true; } if (started && end <= next) { range.setEnd(node, end - offset); break; } offset = next; }
-    if ((window as any).Highlight) (CSS as any).highlights.set('vm-find', new (window as any).Highlight(range));
-    range.startContainer.parentElement?.scrollIntoView({ block: 'center' });
-  }
-}
 function insertImage() {
   const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/png,image/jpeg,image/gif,image/webp,image/bmp'; input.multiple = true;
   input.onchange = () => { if (input.files) void uploadImages([...input.files]); }; input.click();
@@ -476,6 +459,7 @@ async function uploadImages(files: File[]) {
 function action(id: Action) {
   if (!initialized) return;
   contentTools?.close();
+  if (id === 'linkBack') return links?.back();
   if (['save', 'source', 'undo', 'redo'].includes(id)) { submit(); post(id); return; }
   if (id === 'outline') { void changeSetting('outline', !settings.outline); return; }
   if (id === 'mindmap') return showMindmap();
@@ -490,15 +474,19 @@ function action(id: Action) {
     return;
   }
   if (id === 'shortcuts') { post('shortcuts'); return; }
-  if (id === 'search') return showSearch();
+  if (id === 'search') return search?.show();
+  if (id === 'bold' || id === 'italic') return applyInlineFormat(id);
   nativeAction(id);
 }
 toolbar.addEventListener('pointerdown', e => { rememberSelection(); if ((e.target as Element).closest('button')) e.preventDefault(); });
 toolbar.addEventListener('click', e => { const button = (e.target as Element).closest<HTMLElement>('[data-action]'); if (button) action(button.dataset.action as Action); });
 document.addEventListener('selectionchange', rememberSelection);
 document.addEventListener('keydown', e => {
-  if (!overlay.childElementCount) return;
-  if (e.key === 'Escape') { e.preventDefault(); closeDialog(); }
+  if (e.key === 'Escape') {
+    if (!e.defaultPrevented && !e.isComposing && overlay.childElementCount) { e.preventDefault(); closeDialog(); }
+    if (e.defaultPrevented || e.isComposing) e.stopPropagation();
+    return;
+  }
   if (e.key === 'Tab' && overlay.querySelector('.scrim')) {
     const focusable = [...overlay.querySelectorAll<HTMLElement>('button:not(:disabled),input:not([type=hidden]):not(:disabled),select:not(:disabled)')];
     const first = focusable[0], last = focusable.at(-1);
@@ -511,13 +499,6 @@ document.addEventListener('pointerdown', event => {
   if (menu && !menu.contains(event.target as Node) && !(event.target as Element).closest('[data-action=settings]')) closeDialog(false);
 });
 window.addEventListener('resize', () => { if (overlay.querySelector('#settings-menu')) closeDialog(false); });
-document.addEventListener('click', e => {
-  const anchor = (e.target as Element).closest<HTMLAnchorElement>('#editor a');
-  if (!anchor) return;
-  e.preventDefault(); const href = anchor.getAttribute('href') || '';
-  if (href.startsWith('#')) document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView();
-  else post('openLink', { href });
-});
 document.addEventListener('beforeinput', e => {
   if (window.acquireVsCodeApi && !overlay.childElementCount && getSurface()?.contains(e.target as Node) && (e.inputType === 'historyUndo' || e.inputType === 'historyRedo')) {
     e.preventDefault(); e.stopImmediatePropagation(); action(e.inputType === 'historyUndo' ? 'undo' : 'redo');
@@ -540,7 +521,7 @@ window.addEventListener('message', e => {
     const request = requests.get(m.requestId); if (request) { requests.delete(m.requestId); m.type === 'error' ? request.reject(new Error(m.message)) : request.resolve(m.value); }
     if (m.type === 'error') toast(m.message, true);
   } else if (m.type === 'document' && initialized) {
-    if (m.initial || m.text !== lastSent) applyDocument(m.text, m.version); else version = m.version;
+    if (m.initial || m.text !== lastSent || m.history) applyDocument(m.text, m.version, m.history); else version = m.version;
   } else if (m.type === 'ack') { pending.delete(m.seq); version = m.version; updateStatus(); }
   else if (m.type === 'saved') toast('已保存');
   else if (m.type === 'command') action(m.action);
@@ -552,12 +533,40 @@ editor = new Vditor('editor', {
   cdn: boot.cdn, lang: 'zh_CN', mode: settings.mode, height: '100%', cache: { enable: false },
   theme: document.documentElement.dataset.mode === 'dark' ? 'dark' : 'classic',
   value: '', placeholder: '开始书写 Markdown…', outline: { enable: false },
+  link: { isOpen: false },
   toolbar: nativeTools.map(name => ({ name, hotkey: '' })), toolbarConfig: { hide: true },
-  preview: { maxWidth: 1200, delay: 200, math: { engine: 'KaTeX' }, markdown: { sanitize: true, toc: true, mark: true }, theme: { current: 'light', path: `${boot.cdn}/dist/css/content-theme` } },
+  preview: { editOnDoubleClick: true, maxWidth: 1200, delay: 200, math: { engine: 'KaTeX' }, markdown: { sanitize: true, toc: true, mark: true }, theme: { current: 'light', path: `${boot.cdn}/dist/css/content-theme` } },
   input: () => { submit(); },
   after: () => {
+    editor.vditor.lute.SetHeadingID(true);
     installContentAdapter(editor.vditor.lute);
-    toolbarState = installToolbarState(toolbar, editor.vditor.toolbar.element, overlay);
+    links = installLinks({
+      surface: () => {
+        if (editor.vditor.currentMode === 'sv') {
+          const { element, previewElement } = editor.vditor.preview;
+          return { scroll: element, content: previewElement };
+        }
+        const surface = getSurface();
+        return surface && { scroll: surface, content: surface };
+      },
+      base: boot.base,
+      markdown: getValue,
+      markdownToHTML: text => editor.vditor.lute.Md2HTML(text),
+      open: href => post('openLink', { href }),
+      historyChanged: canGoBack => post('linkHistory', { canGoBack }),
+      missing: id => toast(`找不到文档内链接目标：${id}`, true),
+    });
+    toolbarState = installToolbarState(toolbar, editor.vditor.toolbar.element, overlay, getSurface);
+    search = installSearch(toolbar, {
+      surface: getSurface,
+      lineHeight: () => settings.editorFontSize * settings.lineHeight,
+      commit(text = editor.getValue()) {
+        const surface = getSurface()!, top = surface.scrollTop, left = surface.scrollLeft;
+        editor.setValue(text);
+        surface.scrollTop = top; surface.scrollLeft = left;
+        submit();
+      },
+    });
     codeBlocks = installCodeBlocks(editor, { openThemeMenu: anchor => themeMenu.show(anchor, 'codeTheme'), rpc, submit, toast });
     structures = installStructures(editor, submit);
     const menuState = (open: boolean) => post('dialog', { open });
@@ -572,7 +581,11 @@ editor = new Vditor('editor', {
     const divider = document.createElement('div'); divider.id = 'outline-resizer'; divider.tabIndex = 0; divider.setAttribute('role', 'separator'); divider.setAttribute('aria-label', '调整大纲宽度'); divider.setAttribute('aria-orientation', 'vertical');
     editor.vditor.element.querySelector('.vditor-content').prepend(outline, divider);
     outlineResize = installOutlineResize(outline, divider, { width: () => settings.outlineWidth, change: width => { void changeSetting('outlineWidth', width); } });
-    outline.addEventListener('click', e => { const heading = (e.target as Element).closest<HTMLElement>('[data-heading]'); if (heading) navigateHeading(Number(heading.dataset.heading)); });
+    outlineState = installOutline(outline, ['ir', 'wysiwyg', 'sv'].map(mode => editor.vditor[mode].element), {
+      surface: getSurface,
+      markdown: () => editor.getValue(),
+      markdownToHTML: text => editor.vditor.lute.Md2HTML(text),
+    });
     initialized = true; baseline = getValue(); applySettings(); post('ready');
     selectionColors = installSelectionColors({ surface: getSurface, palette, blocked: () => !!overlay.childElementCount || themeMenu.isOpen() || !!blockMenus?.isOpen() || !!colorMenus?.isOpen() || !!contentTools?.isOpen(), remember: rememberSelection, apply: setColor });
     window.VM_APP = { editor, action, getValue, applyDocument, submit, settings: () => settings, documentVersion: () => version, ready: true };

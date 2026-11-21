@@ -28,7 +28,12 @@ export function installCodeBlocks(editor: any, options: {
   function createBar(block: HTMLElement, layer: HTMLElement) {
     const bar = document.createElement('div'); bar.className = 'vm-code-toolbar';
     bar.setAttribute('role', 'group'); bar.setAttribute('aria-label', '代码块操作');
-    bar.innerHTML = `<select class="vm-code-language" aria-label="代码语言"></select><span class="vm-code-actions"><button type="button" class="vm-code-theme" aria-label="代码块主题" aria-haspopup="menu" title="代码块主题（所有代码块）">${icon('theme')}</button>${[['trash', '删除代码块'], ['copy', '复制代码'], ['paste', '粘贴代码']].map(([id, label]) => `<button type="button" data-code-action="${id}" aria-label="${label}" title="${label}">${icon(id)}</button>`).join('')}</span>`;
+    bar.innerHTML = `<select class="vm-code-language" aria-label="代码语言"></select>
+      <span class="vm-code-actions">
+        <button type="button" class="vm-code-theme" aria-label="代码块主题" aria-haspopup="menu" title="代码块主题（所有代码块）">${icon('theme')}</button>
+        <button type="button" data-code-action="wrap" aria-label="自动换行" title="自动换行" aria-pressed="${block.classList.contains('vm-code-wrap')}">${icon('wrap')}</button>
+        ${[['copy', '复制代码'], ['trash', '删除代码块']].map(([id, label]) => `<button type="button" data-code-action="${id}" aria-label="${label}" title="${label}">${icon(id)}</button>`).join('')}
+      </span>`;
     bar.addEventListener('pointerdown', event => { if ((event.target as Element).closest('button')) event.preventDefault(); });
     bar.querySelector<HTMLSelectElement>('.vm-code-language')!.onchange = event => {
       const language = (event.target as HTMLSelectElement).value, source = sourceOf(block)!;
@@ -42,26 +47,17 @@ export function installCodeBlocks(editor: any, options: {
     };
     bar.querySelector<HTMLButtonElement>('.vm-code-theme')!.onclick = event => options.openThemeMenu(event.currentTarget as HTMLElement);
     bar.addEventListener('click', async event => {
-      const action = (event.target as Element).closest<HTMLElement>('[data-code-action]')?.dataset.codeAction;
-      if (!action) return;
-      const source = sourceOf(block)!;
+      const button = (event.target as Element).closest<HTMLButtonElement>('[data-code-action]');
+      if (!button) return;
+      const action = button.dataset.codeAction;
+      if (action === 'wrap') {
+        button.setAttribute('aria-pressed', String(block.classList.toggle('vm-code-wrap')));
+        schedule();
+        return;
+      }
       try {
         if (action === 'copy') {
-          await options.rpc('clipboardWrite', { text: source.textContent || '' }); options.toast('代码已复制');
-        } else if (action === 'paste') {
-          const selection = window.getSelection();
-          const selected = selection?.rangeCount && source.contains(selection.getRangeAt(0).commonAncestorContainer) ? selection.getRangeAt(0).cloneRange() : undefined;
-          const text = await options.rpc('clipboardRead');
-          if (!text || !source.isConnected) return;
-          const validSelection = selected?.startContainer.isConnected && source.contains(selected.commonAncestorContainer);
-          const range = validSelection ? selected! : document.createRange();
-          if (!validSelection) { range.selectNodeContents(source); range.collapse(false); }
-          range.deleteContents();
-          const node = document.createTextNode(String(text).replace(/\r\n?/g, '\n')); range.insertNode(node); range.setStartAfter(node); range.collapse(true);
-          source.parentElement!.style.display = 'block'; block.classList.add('vditor-ir__node--expand');
-          const surface = editor.vditor[editor.vditor.currentMode].element; surface.focus({ preventScroll: true });
-          selection?.removeAllRanges(); selection?.addRange(range);
-          render(block);
+          await options.rpc('clipboardWrite', { text: sourceOf(block)?.textContent || '' }); options.toast('代码已复制');
         } else if (action === 'trash') {
           const surface = block.closest<HTMLElement>('[contenteditable=true]')!;
           const next = block.nextElementSibling, previous = block.previousElementSibling;

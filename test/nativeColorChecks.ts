@@ -1,8 +1,40 @@
 import assert from 'node:assert/strict';
 import type { Frame, Locator, Page } from 'playwright-core';
 
+export async function checkOutlineHover(frame: Frame | Page, background: string, foreground?: string) {
+  const row = frame.locator('#outline [data-heading]:not([aria-current])').first();
+  await frame.locator('[data-action=outline]').hover();
+  const normal = await row.evaluate(element => getComputedStyle(element).color);
+  await row.hover();
+  const colors = await row.evaluate(element => {
+    const style = getComputedStyle(element);
+    return [style.backgroundColor, style.color];
+  });
+  assert.deepEqual(colors, [background, foreground ?? normal], 'Outline hover uses the native list colors');
+}
+
+export async function checkSelectedButtonColors(button: Locator) {
+  const colors = await button.evaluate(element => {
+    const probe = document.createElement('span');
+    probe.style.backgroundColor = 'var(--vscode-inputOption-activeBackground)';
+    probe.style.color = 'var(--vscode-inputOption-activeForeground)';
+    probe.style.outlineColor = 'var(--vscode-inputOption-activeBorder)';
+    document.body.append(probe);
+    const read = (target: Element) => {
+      const style = getComputedStyle(target);
+      return [style.backgroundColor, style.color, style.outlineColor];
+    };
+    const result = { actual: read(element), expected: read(probe) };
+    probe.remove();
+    return result;
+  });
+  assert.deepEqual(colors.actual, colors.expected, 'Selected buttons use native VS Code option colors');
+}
+
 export async function checkNativeColors(frame: Frame | Page) {
   const page = 'page' in frame ? frame.page() : frame;
+  await frame.evaluate(() => getSelection()?.removeAllRanges());
+  await frame.locator('#selection-colors').waitFor({ state: 'hidden' });
   const original = await frame.evaluate(() => window.VM_APP.getValue());
   const expectColor = async (element: Locator, property: 'color' | 'backgroundColor', css: string) => {
     const colors = await element.evaluate((element, { property, css }) => {
@@ -31,7 +63,7 @@ export async function checkNativeColors(frame: Frame | Page) {
   await expectColor(frame.locator('#toolbar'), 'backgroundColor', 'var(--vscode-editor-background)');
   await frame.locator('[data-action=settings]').click();
   await frame.waitForFunction(() => document.querySelector('[data-action=settings]')!.getAttribute('aria-expanded') === 'true');
-  await expectColor(frame.locator('[data-action=settings]'), 'backgroundColor', 'var(--vscode-actionBar-toggledBackground,var(--vscode-toolbar-activeBackground,var(--toolbar-selected-fallback)))');
+  await checkSelectedButtonColors(frame.locator('[data-action=settings]'));
   await page.keyboard.press('Escape');
   assert.equal(await frame.evaluate(() => window.VM_APP.getValue()), original, 'Checking link and toolbar colors leaves Markdown unchanged');
 }

@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import type { Frame, Page } from 'playwright-core';
-import { checkNativeColors } from './nativeColorChecks';
+import { checkNativeColors, checkOutlineHover, checkSelectedButtonColors } from './nativeColorChecks';
 
 export async function checkThemeUI(frame: Frame | Page, replaceDocument: (text: string) => Promise<void>) {
   const page = 'page' in frame ? frame.page() : frame;
-  const fixture = '# Theme test\n\nMarked **bold** text for highlighting.\n\n[Visible link](https://example.com) and [reference link][reference].\n\n[reference]: https://example.com/reference\n\n| Check | Result |\n| --- | --- |\n| One | Passed |\n| Two | Passed |\n\n```json\n{"apple":0.6}\n```\n\nEnd of theme test.\n';
+  const fixture = '# Theme test\n\nMarked **bold** text for highlighting.\n\n[Visible link](https://example.com) and [reference link][reference].\n\n[reference]: https://example.com/reference\n\n| Check | Result |\n| --- | --- |\n| One | Passed |\n| Two | Passed |\n\n```json\n{"apple":0.6}\n```\n\n## End of theme test\n';
   const light = 'local-tests.vditor-test-themes/Vditor Test Light', dark = 'local-tests.vditor-test-themes/Vditor Test Dark';
   const mode = async (value: string) => {
     await frame.locator('[data-action=settings]').click(); await frame.locator('[data-setting=mode]').selectOption(value); await frame.locator('#settings-done').click();
@@ -26,6 +26,7 @@ export async function checkThemeUI(frame: Frame | Page, replaceDocument: (text: 
   await frame.locator('body').screenshot({path:'.test-results/theme-menu-0.1.2.png'});
   await frame.locator(`[data-theme-id="${light}"]`).click();
   await frame.waitForFunction(()=>getComputedStyle(window.document.body).backgroundColor==='rgb(252, 248, 238)');
+  await checkOutlineHover(frame, 'rgb(232, 232, 232)');
   const table = frame.locator('.vditor-ir table');
   assert.equal(await table.locator('td').first().evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(252, 248, 238)');
   assert.equal(await table.locator('tbody tr').last().evaluate(e=>getComputedStyle(e).backgroundColor),'rgba(0, 0, 0, 0)');
@@ -37,6 +38,7 @@ export async function checkThemeUI(frame: Frame | Page, replaceDocument: (text: 
   assert.equal(await frame.locator('body').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(252, 248, 238)','Code and page colors are independent');
   await choose('theme',dark);
   assert.equal(await frame.locator('.vditor-ir table td').first().evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(23, 32, 42)');
+  await checkOutlineHover(frame, 'rgb(42, 45, 46)', 'rgb(240, 246, 252)');
   assert.equal(await frame.evaluate(()=>window.VM_APP.getValue()),original,'Theme and table appearance do not rewrite Markdown');
   await choose('theme',light);
   await frame.locator('[data-action=theme]').click(); await page.keyboard.press('Home'); await page.keyboard.press('Enter');
@@ -86,13 +88,7 @@ export async function checkThemeUI(frame: Frame | Page, replaceDocument: (text: 
   assert.ok((await frame.evaluate(()=>getSelection()!.toString())).includes('bold'),'Real mouse selection triggers the highlight palette');
   await frame.locator('[data-action=theme]').click(); await page.keyboard.press('Escape');
   assert.equal(await frame.locator('#theme-menu').count(),0);
-  const selectedColor = async (selector: string) => {
-    const colors = await frame.locator(selector).evaluate(e=>{
-      const probe=document.createElement('span');probe.style.backgroundColor='var(--vscode-actionBar-toggledBackground,var(--vscode-toolbar-activeBackground,var(--toolbar-selected-fallback)))';document.body.append(probe);
-      const result={actual:getComputedStyle(e).backgroundColor,expected:getComputedStyle(probe).backgroundColor};probe.remove();return result;
-    });
-    assert.equal(colors.actual,colors.expected,'Selected buttons use the native VS Code toggle color');
-  };
+  const bold = frame.locator('[data-action=bold]');
   const themes = [light,dark,...await frame.evaluate(()=>window.VM_BOOT.themes.filter((theme:any)=>theme.kind.startsWith('hc-')).map((theme:any)=>theme.id))];
   for (const value of ['ir','wysiwyg']) {
     await mode(value); await replaceDocument(fixture);
@@ -101,11 +97,15 @@ export async function checkThemeUI(frame: Frame | Page, replaceDocument: (text: 
       await checkNativeColors(frame);
       await frame.locator(`.vditor-${value} strong`).click();
       await frame.waitForFunction(()=>window.document.querySelector('[data-action=bold]')!.getAttribute('aria-pressed')==='true');
-      await selectedColor('[data-action=bold]');
-      await frame.locator('[data-action=bold]').hover(); await selectedColor('[data-action=bold]');
+      await checkSelectedButtonColors(bold);
+      await bold.hover();
+      await checkSelectedButtonColors(bold);
+      await page.mouse.down();
+      try { await checkSelectedButtonColors(bold); }
+      finally { await frame.locator('[data-action=source]').hover(); await page.mouse.up(); }
       assert.equal(await frame.locator(`.vditor-${value} h1`).evaluate(e=>getComputedStyle(e).borderBottomWidth),'0px','Heading underline is removed');
-      await frame.locator('[data-action=settings]').click(); await frame.waitForFunction(()=>window.document.querySelector('[data-action=settings]')!.getAttribute('aria-expanded')==='true'); await selectedColor('[data-action=settings]'); await page.keyboard.press('Escape');
-      await frame.locator('[data-action=textColor]').click(); await frame.waitForFunction(()=>window.document.querySelector('[data-action=textColor]')!.getAttribute('aria-expanded')==='true'); await selectedColor('[data-action=textColor]'); await page.keyboard.press('Escape');
+      await frame.locator('[data-action=settings]').click(); await frame.waitForFunction(()=>window.document.querySelector('[data-action=settings]')!.getAttribute('aria-expanded')==='true'); await checkSelectedButtonColors(frame.locator('[data-action=settings]')); await page.keyboard.press('Escape');
+      await frame.locator('[data-action=textColor]').click(); await frame.waitForFunction(()=>window.document.querySelector('[data-action=textColor]')!.getAttribute('aria-expanded')==='true'); await checkSelectedButtonColors(frame.locator('[data-action=textColor]')); await page.keyboard.press('Escape');
       await frame.locator(`.vditor-${value}>.vditor-reset>p`).first().click({position:{x:4,y:8}});
       await frame.waitForFunction(()=>window.document.querySelector('[data-action=bold]')!.getAttribute('aria-pressed')==='false');
     }

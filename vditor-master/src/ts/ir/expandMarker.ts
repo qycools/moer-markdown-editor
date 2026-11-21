@@ -56,6 +56,16 @@ export const expandMarker = (range: Range, vditor: IVditor) => {
         return;
     }
 
+    if (vditor.options.preview.editOnDoubleClick) {
+        const source = hasClosestByClassName(range.startContainer, "vditor-ir__marker--pre");
+        if (source) {
+            source.parentElement.classList.add("vditor-ir__node--expand");
+            source.parentElement.classList.remove("vditor-ir__node--hidden");
+            setSelectionFocus(range);
+        }
+        return;
+    }
+
     if (nodeElement) {
         nodeElement.classList.add("vditor-ir__node--expand");
         nodeElement.classList.remove("vditor-ir__node--hidden");

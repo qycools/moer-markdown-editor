@@ -29,11 +29,11 @@ page.on('pageerror', error => { errors.push(error.message); console.error('BROWS
 page.on('console', msg => { if (msg.type() === 'error') console.error('BROWSER CONSOLE', msg.text().slice(0, 400)); });
 const themeBase = JSON.parse(await readFile('test/fixtures/themes/base.json', 'utf8'));
 const themeDark = JSON.parse(await readFile('test/fixtures/themes/dark.json', 'utf8'));
-const mockTheme = (name, kind, data) => { const c={...themeBase.colors,...data.colors}; return {id:'local-tests.vditor-test-themes/Vditor Test '+name,label:'Fixture '+name,kind,colors:{bg:c['editor.background'],fg:c['editor.foreground'],panel:c['sideBar.background'],border:c['widget.border'],muted:c.descriptionForeground,accent:c.focusBorder,codeBg:c['textCodeBlock.background']},tokens:{keyword:kind==='dark'?'#ff7bc6':'#9c27b0',string:kind==='dark'?'#a5d6ff':'#0084bf',number:kind==='dark'?'#79c0ff':'#00885f',comment:'#123456',function:'#795e26',type:'#267f99',variable:'#001080',literal:'#0000ff',property:'#0091a0'}}; };
+const mockTheme = (name, kind, data) => { const c={...themeBase.colors,...data.colors}; return {id:'local-tests.vditor-test-themes/Vditor Test '+name,label:'Fixture '+name,kind,colors:{bg:c['editor.background'],fg:c['editor.foreground'],panel:c['sideBar.background'],border:c['widget.border'],muted:c.descriptionForeground,accent:c.focusBorder,codeBg:c['textCodeBlock.background']},listHover:{background:c['list.hoverBackground'],foreground:c['list.hoverForeground']},tokens:{keyword:kind==='dark'?'#ff7bc6':'#9c27b0',string:kind==='dark'?'#a5d6ff':'#0084bf',number:kind==='dark'?'#79c0ff':'#00885f',comment:'#123456',function:'#795e26',type:'#267f99',variable:'#001080',literal:'#0000ff',property:'#0091a0'}}; };
 const themes=[mockTheme('Light','light',{}),mockTheme('Dark','dark',themeDark)];
-const boot = { themes, activeTheme:themes[0].id, codePalette:themes[0].tokens, cdn: pathToFileURL(path.resolve('media/vditor')).href, base: pathToFileURL(path.resolve('test/fixtures') + path.sep).href, settings: { ...defaults, theme: themes[0].id }, dark: false, filename: '功能验收.md' };
+const boot = { themes, activeTheme:themes[0].id, codePalette:themes[0].tokens, cdn: pathToFileURL(path.resolve('media/vditor')).href, base: pathToFileURL(path.resolve('test/fixtures/功能验收.md')).href, settings: { ...defaults, theme: themes[0].id }, dark: false, filename: '功能验收.md' };
 const hostStyle = Object.entries(themeBase.colors).map(([key,value]) => `--vscode-${key.replaceAll('.','-')}:${value}`).join(';');
-const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>:root{${hostStyle}}</style><link href="${pathToFileURL(path.resolve('dist/webview.css')).href}" rel="stylesheet"></head><body><div id="app"><div id="editor"></div><footer id="status"></footer></div><div id="overlay"></div><script>window.VM_BOOT=${JSON.stringify(boot)};window.VM_MESSAGES=[];window.VM_DOCUMENT=${JSON.stringify(fixture)};window.acquireVsCodeApi=()=>({getState(){return{}},setState(){},postMessage(m){window.VM_MESSAGES.push(m);if(m.type==='ready'){setTimeout(()=>window.postMessage({type:'document',text:window.VM_DOCUMENT,version:1,initial:true},'*'),0)}else if(m.type==='edit'){if(window.VM_DOCUMENT!==m.baseText)throw Error('Stale document base');window.VM_DOCUMENT=m.text;setTimeout(()=>window.postMessage({type:'ack',seq:m.seq,text:m.text,version:m.seq+1},'*'),0)}else if(m.requestId){if(m.type==='clipboardWrite')window.VM_CLIPBOARD=m.text;setTimeout(()=>window.postMessage({type:'result',requestId:m.requestId,value:m.type==='clipboardRead'?(window.VM_CLIPBOARD||''):m.type==='browse'?'C:/Export':true},'*'),0)}}});</script><script src="${pathToFileURL(path.resolve('dist/webview.js')).href}"></script></body></html>`;
+const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>:root{${hostStyle}}</style><link href="${pathToFileURL(path.resolve('dist/webview.css')).href}" rel="stylesheet"></head><body><div id="app"><div id="editor"></div><footer id="status"></footer></div><div id="overlay"></div><script>window.VM_BOOT=${JSON.stringify(boot)};window.VM_MESSAGES=[];window.VM_DOCUMENT=${JSON.stringify(fixture)};window.acquireVsCodeApi=()=>({getState(){return{}},setState(){},postMessage(m){window.VM_MESSAGES.push(m);if(m.type==='ready'){setTimeout(()=>window.postMessage({type:'document',text:window.VM_DOCUMENT,version:1,initial:true},'*'),0)}else if(m.type==='edit'){if(window.VM_DOCUMENT!==m.baseText)throw Error('Stale document base');window.VM_DOCUMENT=m.text;setTimeout(()=>window.postMessage({type:'ack',seq:m.seq,text:m.text,version:m.seq+1},'*'),0)}else if(m.requestId){if(m.type==='clipboardWrite')window.VM_CLIPBOARD=m.text;setTimeout(()=>window.postMessage({type:'result',requestId:m.requestId,value:m.type==='browse'?'C:/Export':true},'*'),0)}}});</script><script src="${pathToFileURL(path.resolve('dist/webview.js')).href}"></script></body></html>`;
 await writeFile('.test-results/frontend.html', html);
 try {
   await page.goto(pathToFileURL(path.resolve('.test-results/frontend.html')).href);
@@ -93,7 +93,7 @@ try {
   for (const [command, expected] of formatting) {
     await page.evaluate(() => { window.VM_DOCUMENT='示例文字\n';window.VM_APP.applyDocument(window.VM_DOCUMENT,100);const surface=window.VM_APP.editor.vditor.wysiwyg.element;surface.focus();const range=document.createRange();range.selectNodeContents(surface.querySelector('p'));const selection=getSelection();selection.removeAllRanges();selection.addRange(range); });
     await page.locator(`[data-action="${command}"]`).click();
-    await page.waitForFunction(() => window.VM_MESSAGES.at(-1)?.type !== 'edit');
+    await page.waitForFunction(() => document.querySelector('[data-action=save]')?.getAttribute('aria-busy') !== 'true');
     assert.match(await page.evaluate(() => window.VM_APP.getValue()), expected, `Native formatting: ${command}`);
   }
   await page.evaluate(() => { window.VM_DOCUMENT='标题文字\n';window.VM_APP.applyDocument(window.VM_DOCUMENT,101);const e=window.VM_APP.editor.vditor.wysiwyg.element;e.focus();const r=document.createRange();r.selectNodeContents(e.querySelector('p'));getSelection().removeAllRanges();getSelection().addRange(r); });
@@ -118,10 +118,18 @@ try {
   await ime.detach();
   console.log('PASS IME composition and commit');
   await build({ entryPoints: ['test/editorChecks.ts'], outfile: 'dist/editor-checks.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
-  const { checkEditorUI } = await import('../dist/editor-checks.mjs?test=' + Date.now());
-  await checkEditorUI(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,500); },text), {
-    read: () => page.evaluate(() => window.VM_CLIPBOARD || ''), write: text => page.evaluate(text => {window.VM_CLIPBOARD=text;},text),
-  });
+  const { checkEditorUI, checkFindAndFormatting, checkInlineSource, checkHistoryLocation, checkDocumentLinks } = await import('../dist/editor-checks.mjs?test=' + Date.now());
+  await checkFindAndFormatting(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,500); },text));
+  await checkInlineSource(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,500); },text));
+  await checkHistoryLocation(page);
+  await checkDocumentLinks(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,500); },text),
+    () => page.evaluate(() => window.postMessage({ type: 'command', action: 'linkBack' }, '*')), async (click, href) => {
+      const before = await page.evaluate(() => window.VM_MESSAGES.length);
+      await click();
+      assert.deepEqual(await page.evaluate(before => window.VM_MESSAGES.slice(before).filter(m => m.type === 'openLink'), before), [{ type: 'openLink', href }]);
+    });
+  await checkEditorUI(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,500); },text),
+    () => page.evaluate(() => window.VM_CLIPBOARD || ''));
   await build({ entryPoints: ['test/themeChecks.ts'], outfile: 'dist/theme-checks.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
   const { checkThemeUI } = await import('../dist/theme-checks.mjs?test=' + Date.now());
   await checkThemeUI(page, text => page.evaluate(text => {window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,600);},text));

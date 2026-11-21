@@ -52,8 +52,22 @@ export function installContentAdapter(lute: any) {
     if (typeof lute[name] !== 'function') continue;
     const original = lute[name].bind(lute);
     lute[name] = (value: string, ...rest: any[]) => {
+      let wrapStates: boolean[] | undefined;
       if (consumed.includes(name)) {
         const input = templateFor(value);
+        if (value.includes('vm-inline-pending')) {
+          for (const wrapper of input.content.querySelectorAll('.vm-inline-pending')) {
+            const content = wrapper.matches('strong,em') ? wrapper : wrapper.querySelector('strong,em');
+            const text = content?.textContent?.replaceAll('\u200b', '') || '';
+            if (!text.trim()) wrapper.replaceWith(text);
+            else wrapper.classList.remove('vm-inline-pending');
+          }
+        }
+        if (value.includes('vm-code-wrap')) {
+          const blocks = input.content.querySelectorAll('[data-type="code-block"]');
+          if (name.startsWith('Spin')) wrapStates = [...blocks].map(block => block.classList.contains('vm-code-wrap'));
+          for (const block of blocks) block.classList.remove('vm-code-wrap');
+        }
         for (const wrapper of input.content.querySelectorAll('.vm-inline-image')) {
           const token = wrapper.querySelector(inlineSelector);
           if (token) wrapper.replaceWith(token);
@@ -65,6 +79,10 @@ export function installContentAdapter(lute: any) {
       const output = original(value, ...rest);
       if (!produced.includes(name)) return output;
       const rendered = templateFor(output);
+      if (wrapStates) {
+        const blocks = rendered.content.querySelectorAll('[data-type="code-block"]');
+        if (blocks.length === wrapStates.length) blocks.forEach((block, index) => block.classList.toggle('vm-code-wrap', wrapStates[index]));
+      }
       decorateColors(rendered.content);
       decorateInline(rendered.content);
       return rendered.innerHTML;

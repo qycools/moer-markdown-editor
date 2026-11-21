@@ -3,7 +3,9 @@
   "colors": {
     "editor.background": "#17202a", "editor.foreground": "#e6edf3", "sideBar.background": "#212d3a", "textCodeBlock.background": "#202b38", "focusBorder": "#58a6ff",
     "textLink.foreground": "#58a6ff", "textLink.activeForeground": "#9bcaff", "icon.foreground": "#c5c5c5",
-    "toolbar.hoverBackground": "#5a5d5e50", "toolbar.activeBackground": "#63666750", "actionBar.toggledBackground": "#383a49"
+    "list.hoverBackground": "#2a2d2e", "list.hoverForeground": "#f0f6fc",
+    "toolbar.hoverBackground": "#5a5d5e50", "toolbar.activeBackground": "#63666750", "actionBar.toggledBackground": "#383a49",
+    "inputOption.activeBackground": "#2489db82", "inputOption.activeBorder": "#2488db", "inputOption.activeForeground": "#ffffff"
   },
   "tokenColors": [
     { "scope": "keyword", "settings": { "foreground": "#ff7bc6" } },

@@ -465,13 +465,21 @@ class WYSIWYG {
 
             highlightToolbarWYSIWYG(vditor);
 
+            if (vditor.options.preview.editOnDoubleClick) {
+                this.element.querySelectorAll(".vditor-wysiwyg__preview").forEach((preview) => {
+                    const source = preview.previousElementSibling as HTMLElement;
+                    if (!source.contains(range.startContainer) && source.style.display !== "none") {
+                        source.style.display = "none";
+                    }
+                });
+            }
             // 点击后光标落于预览区，需展开代码块
             let previewElement = hasClosestByClassName(event.target, "vditor-wysiwyg__preview");
             if (!previewElement) {
                 previewElement =
                     hasClosestByClassName(getEditorRange(vditor).startContainer, "vditor-wysiwyg__preview");
             }
-            if (previewElement) {
+            if (previewElement && (!vditor.options.preview.editOnDoubleClick || event.detail === 2)) {
                 showCode(previewElement, vditor);
             }
 
