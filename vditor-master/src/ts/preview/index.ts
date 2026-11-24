@@ -47,6 +47,7 @@ export class Preview {
             event.preventDefault();
         });
         this.previewElement.addEventListener("click", (event: MouseEvent & { target: HTMLElement }) => {
+            if (event.defaultPrevented) return;
             const spanElement = hasClosestByMatchTag(event.target, "SPAN");
             if (spanElement && hasClosestByClassName(spanElement, "vditor-toc")) {
                 const headingElement =

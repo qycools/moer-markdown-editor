@@ -15,6 +15,35 @@ export function colorStyle(tag: string): string | undefined {
 }
 
 export type TextStyles = Partial<Record<'color' | 'background-color' | 'font-size', string | null>>;
+
+export function includeInlineCode(range: Range) {
+  if (range.collapsed) return false;
+  let changed = false;
+  const edges = [
+    { node: range.startContainer, offset: range.startOffset, start: true },
+    { node: range.endContainer, offset: range.endOffset, start: false },
+  ];
+  for (const { node, offset, start } of edges) {
+    const parent = node instanceof Element ? node : node.parentElement;
+    const code = parent?.closest('code');
+    if (!code || code.closest('[data-type="code-block"],.vditor-ir__marker')) continue;
+    changed = true;
+    const wrapper = code.closest('.vditor-ir__node[data-type="code"]') || code;
+    const portion = document.createRange();
+    portion.selectNodeContents(code);
+    if (start) {
+      portion.setStart(node, offset);
+      if (portion.toString().replaceAll('\u200b', '')) range.setStartBefore(wrapper);
+      else range.setStartAfter(wrapper);
+    } else {
+      portion.setEnd(node, offset);
+      if (portion.toString().replaceAll('\u200b', '')) range.setEndAfter(wrapper);
+      else range.setEndBefore(wrapper);
+    }
+  }
+  return changed;
+}
+
 export function editTextStyles(target: HTMLElement, changes: TextStyles, lute: any, mode: string) {
   if (mode === 'ir') {
     const surface = target.closest('[contenteditable=true]')!;
@@ -65,25 +94,33 @@ export function editTextStyles(target: HTMLElement, changes: TextStyles, lute: a
   highest.replaceWith(...container.childNodes);
   return middle;
 }
-export function undecorateColors(root: ParentNode) {
-  for (const span of [...root.querySelectorAll('[data-vm-color]')].reverse()) span.replaceWith(...span.childNodes);
-  for (const token of root.querySelectorAll('.vm-color-token')) token.classList.remove('vm-color-token');
+export function undecorateInlineStyles(root: ParentNode) {
+  for (const span of [...root.querySelectorAll('[data-vm-color],[data-vm-inline-format]')].reverse()) span.replaceWith(...span.childNodes);
+  for (const token of root.querySelectorAll('.vm-color-token,.vm-inline-format-token')) token.classList.remove('vm-color-token', 'vm-inline-format-token');
 }
-export function decorateColors(root: ParentNode) {
+export function decorateInlineStyles(root: ParentNode) {
   for (const block of root.querySelectorAll('p,h1,h2,h3,h4,h5,h6,li,td,th,blockquote')) {
-    const stack: { token: Element; style: string | undefined }[] = [];
+    const stack: { token: Element; tag: string; style: string | undefined; valid: boolean }[] = [];
     for (const token of [...block.querySelectorAll('[data-type="html-inline"]')]) {
-      if (token.closest('p,h1,h2,h3,h4,h5,h6,li,td,th,blockquote') !== block || token.closest('[data-vm-color]')) continue;
+      if (token.closest('p,h1,h2,h3,h4,h5,h6,li,td,th,blockquote') !== block || token.closest('[data-vm-color],[data-vm-inline-format]')) continue;
       const text = (token.textContent || '').replace(/\u200b/g, '').trim();
-      if (/^<span\b/i.test(text)) stack.push({ token, style: colorStyle(text) });
-      else if (/^<\/span\s*>$/i.test(text)) {
+      const match = /^<(\/?)(span|strong|em)\b/i.exec(text);
+      if (!match) continue;
+      const tag = match[2].toLowerCase();
+      if (!match[1]) {
+        const style = tag === 'span' ? colorStyle(text) : undefined;
+        stack.push({ token, tag, style, valid: !!style || (tag !== 'span' && text.toLowerCase() === `<${tag}>`) });
+      } else if (text.toLowerCase() === `</${tag}>` && stack.at(-1)?.tag === tag) {
         const start = stack.pop();
-        if (!start?.style || start.token.parentNode !== token.parentNode) continue;
-        const span = document.createElement('span'); span.dataset.vmColor = '1'; span.setAttribute('style', start.style);
+        if (!start?.valid || start.token.parentNode !== token.parentNode) continue;
+        const span = document.createElement(tag);
+        const marker = start.style ? 'vm-color-token' : 'vm-inline-format-token';
+        if (start.style) { span.dataset.vmColor = '1'; span.setAttribute('style', start.style); }
+        else span.dataset.vmInlineFormat = tag;
         start.token.before(span);
         let node: ChildNode | null = start.token;
         while (node) { const next: ChildNode | null = node.nextSibling; span.append(node); if (node === token) break; node = next; }
-        start.token.classList.add('vm-color-token'); token.classList.add('vm-color-token');
+        start.token.classList.add(marker); token.classList.add(marker);
       }
     }
   }

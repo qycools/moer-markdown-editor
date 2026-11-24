@@ -1,4 +1,5 @@
-import { decorateColors, undecorateColors } from './colors';
+import { decorateInlineStyles, undecorateInlineStyles } from './colors';
+import { applyTableWidths } from './tableWidths';
 
 const inlineSelector = '[data-type="html-inline"]';
 export const tableWidthMarkup = '<wbr data-moye-table="auto">';
@@ -16,6 +17,8 @@ function decorateInline(root: ParentNode) {
       token.dataset.moyeTable = 'auto';
       continue;
     }
+    const width = /^<wbr data-moye-col-width="(\d{1,4})">$/.exec(markup);
+    if (width && token.closest('th')) { token.dataset.moyeColWidth = width[1]; continue; }
     if (!/^<img\s/i.test(markup)) continue;
     const fragment = templateFor(markup).content;
     const source = fragment.firstChild;
@@ -48,7 +51,7 @@ export function stripImageFallbacks(root: ParentNode) {
 export function installContentAdapter(lute: any) {
   const produced = ['Md2VditorDOM', 'Md2VditorIRDOM', 'HTML2VditorDOM', 'HTML2VditorIRDOM', 'SpinVditorDOM', 'SpinVditorIRDOM'];
   const consumed = ['SpinVditorDOM', 'SpinVditorIRDOM', 'VditorDOM2Md', 'VditorIRDOM2Md', 'VditorDOM2HTML', 'VditorIRDOM2HTML'];
-  for (const name of new Set([...produced, ...consumed])) {
+  for (const name of new Set([...produced, ...consumed, 'Md2HTML'])) {
     if (typeof lute[name] !== 'function') continue;
     const original = lute[name].bind(lute);
     lute[name] = (value: string, ...rest: any[]) => {
@@ -73,18 +76,24 @@ export function installContentAdapter(lute: any) {
           if (token) wrapper.replaceWith(token);
         }
         stripImageFallbacks(input.content);
-        undecorateColors(input.content);
+        undecorateInlineStyles(input.content);
         value = input.innerHTML;
       }
       const output = original(value, ...rest);
+      if (name === 'Md2HTML' && output.includes('wbrdata-moye-')) {
+        const rendered = templateFor(output);
+        applyTableWidths(rendered.content);
+        return rendered.innerHTML;
+      }
       if (!produced.includes(name)) return output;
       const rendered = templateFor(output);
       if (wrapStates) {
         const blocks = rendered.content.querySelectorAll('[data-type="code-block"]');
         if (blocks.length === wrapStates.length) blocks.forEach((block, index) => block.classList.toggle('vm-code-wrap', wrapStates[index]));
       }
-      decorateColors(rendered.content);
+      decorateInlineStyles(rendered.content);
       decorateInline(rendered.content);
+      applyTableWidths(rendered.content, (attribute, value) => inlineToken(lute, name.includes('IRDOM') ? 'ir' : 'wysiwyg', `<wbr ${attribute}="${value}">`));
       return rendered.innerHTML;
     };
   }

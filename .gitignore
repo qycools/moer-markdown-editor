@@ -2,6 +2,7 @@ node_modules/
 /dist/
 /media/vditor/
 /media/codicons/
+/media/licenses/
 /media/screenshots/
 /.test-results/
 /.vscode-test/

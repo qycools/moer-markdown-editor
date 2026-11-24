@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { readFile, writeFile, mkdir, copyFile } from 'node:fs/promises';
 import { chromium, type Frame } from 'playwright-core';
-import { checkDocumentLinks, checkEditorUI, checkInlineSource } from './editorChecks';
+import { checkDocumentLinks, checkEditorUI, checkInlineSource, checkSearchNavigation } from './editorChecks';
 import { checkThemeUI } from './themeChecks';
 import { checkNativeColors, checkOutlineHover } from './nativeColorChecks';
 import { checkLayoutUI } from './layoutChecks';
 import { checkColorUI } from './colorChecks';
-import { checkContentTools } from './contentChecks';
+import { checkContentTools, checkDirectContentEditing } from './contentChecks';
 import { actions, EXTENSION_ID } from '../src/shared';
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -81,12 +81,13 @@ export async function run() {
       await frame!.waitForFunction(text => window.VM_APP.getValue().includes(text.trim().split('\n')[0]) && window.VM_APP.getValue().includes(text.trim().split('\n').at(-1)!), text);
     };
     await checkDocumentLinks(frame!, replaceDocument, () => page.keyboard.press('Escape'));
+    await checkDirectContentEditing(frame!, replaceDocument, key => page.keyboard.press(`Control+${key}`));
     await replaceDocument('# Link origin\n\n[Jump](#destination)\n\n' + 'Spacer.\n\n'.repeat(65) + '## Destination\n\nTarget text.\n');
     const linkSurface = frame!.locator('.vditor-ir>.vditor-reset');
     const jump = linkSurface.locator('.vditor-ir__link');
     await jump.scrollIntoViewIfNeeded();
     const origin = await linkSurface.evaluate(element => element.scrollTop);
-    await jump.click();
+    await jump.click({ modifiers: ['Control'] });
     const destination = await linkSurface.evaluate(element => element.scrollTop);
     assert.ok(destination > origin + 100, 'The link scrolls to the destination');
     for (const [action, panel] of [['search', '#search-bar'], ['settings', '#settings-menu']]) {
@@ -102,7 +103,7 @@ export async function run() {
     const localTarget = path.join(folder, 'Link target.txt');
     await writeFile(localTarget, 'Local link target\n');
     await replaceDocument('[Local target](./Link%20target.txt)\n');
-    await frame!.locator('.vditor-ir .vditor-ir__link').click();
+    await frame!.locator('.vditor-ir .vditor-ir__link').click({ modifiers: ['Control'] });
     const localUri = vscode.Uri.file(localTarget).toString();
     await until(() => vscode.window.activeTextEditor?.document.uri.toString() === localUri, 'Relative link opens a sibling file in VS Code').catch(async error => {
       console.log('Local link diagnostics', { expected: localUri, active: vscode.window.activeTextEditor?.document.uri.toString(), tabs: vscode.window.tabGroups.activeTabGroup.tabs.map(tab => tab.label), status: await frame!.locator('#status').textContent() });
@@ -131,6 +132,7 @@ export async function run() {
       assert.equal(await frame!.locator('#status').textContent(), command === 'undo' ? '已撤销' : '已重做');
     }
     console.log('PASS VS Code undo and redo reveal the changed paragraph from outside the viewport');
+    await checkSearchNavigation(frame!, replaceDocument, () => page.keyboard.press('Control+f'));
     const beforeReplace = '# Find in VS Code\n\n**Target** target.\n';
     await replaceDocument(beforeReplace);
     await frame!.locator('.vditor-ir strong').click();

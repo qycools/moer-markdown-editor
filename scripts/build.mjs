@@ -16,17 +16,27 @@ for (const folder of ['js', 'css', 'images']) await cp(path.join(root, 'vditor-m
 await cp('vditor-master/LICENSE', 'media/vditor/LICENSE');
 await mkdir('media/codicons', { recursive: true });
 await cp('node_modules/@vscode/codicons/LICENSE', 'media/codicons/LICENSE');
+await mkdir('media/licenses', { recursive: true });
+for (const name of ['yazl', 'buffer-crc32']) await cp(`node_modules/${name}/LICENSE`, `media/licenses/${name}.txt`);
 await cp('src/renderer.html', 'dist/renderer.html');
 const pkg = JSON.parse(await readFile('package.json', 'utf8'));
 await build({ entryPoints: ['src/shared.ts'], outfile: 'dist/shared.mjs', platform: 'node', format: 'esm' });
-const { commands, APP_NAME } = await import('../dist/shared.mjs?build=' + Date.now());
+const { commands, APP_NAME, defaultColors } = await import('../dist/shared.mjs?build=' + Date.now());
 pkg.displayName = APP_NAME; pkg.contributes.customEditors.forEach(editor => { editor.displayName = APP_NAME; }); pkg.contributes.configuration.title = APP_NAME;
 pkg.contributes.commands = [{ command: 'vditorMarkdown.open', title: `${APP_NAME}: 打开可视化编辑器`, icon: '$(open-preview)' }, ...commands.map(([id, label]) => ({ command: `vditorMarkdown.${id}`, title: `${APP_NAME}: ${label}`, enablement: 'activeCustomEditorId == vditorMarkdown.editor' }))];
 const keys = { save: 'ctrl+s', undo: 'ctrl+z', redo: 'ctrl+y', bold: 'ctrl+b', italic: 'ctrl+i', strike: 'alt+shift+5', link: 'ctrl+k', search: 'ctrl+f', source: 'ctrl+alt+m', export: 'ctrl+alt+e' };
 const macKeys = { save: 'cmd+s', undo: 'cmd+z', redo: 'cmd+shift+z', bold: 'cmd+b', italic: 'cmd+i', strike: 'alt+shift+5', link: 'cmd+k', search: 'cmd+f', source: 'cmd+alt+m', export: 'cmd+alt+e' };
 const when = "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen";
 pkg.contributes.keybindings = Object.entries(keys).map(([id, key]) => ({ command: `vditorMarkdown.${id}`, key, mac: macKeys[id], when }));
+pkg.contributes.keybindings.push({ command: 'vditorMarkdown.blockSource', key: 'ctrl+alt+b', mac: 'cmd+alt+b', when: `${when} && editorAreaFocus` });
 pkg.contributes.keybindings.push({ command: 'vditorMarkdown.redo', key: 'cmd+y', when: `isMac && ${when}` });
 pkg.contributes.keybindings.push({ command: 'vditorMarkdown.linkBack', key: 'escape', when: `${when} && editorAreaFocus && !inputFocus && vditorMarkdown.canGoBack` });
+for (const [alignment, key] of [['Center', 'e'], ['Left', 'l'], ['Right', 'r']]) {
+  const context = `${when} && editorAreaFocus`;
+  pkg.contributes.keybindings.push(
+    { command: `vditorMarkdown.image${alignment}`, key: `ctrl+${key}`, mac: `cmd+${key}`, when: `${context} && vditorMarkdown.imageSelected` },
+    { command: `vditorMarkdown.table${alignment}`, key: `ctrl+${key}`, mac: `cmd+${key}`, when: `${context} && vditorMarkdown.tableSelected && !vditorMarkdown.imageSelected` });
+}
+for (const name of ['textColors', 'backgroundColors']) pkg.contributes.configuration.properties[`vditorMarkdown.${name}`].default = defaultColors;
 await writeFile('package.json', JSON.stringify(pkg, null, 2) + '\n');
 console.log('Built local Vditor 4.0.1 and extension.');

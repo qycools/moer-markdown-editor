@@ -11,9 +11,9 @@ export const actions = [
   ['quote', '引用'], ['code', '代码块'], ['undo', '撤销'], ['redo', '重做'],
   ['search', '搜索'], ['shortcuts', '快捷键配置'], ['settings', '设置'],
 ] as const;
-export const commands = [...actions, ['linkBack', '返回文档内链接起点']] as const;
+export const commands = [...actions, ['blockSource', '编辑当前块源码'], ['imageResources', '管理图片资源'], ['linkBack', '返回文档内链接起点'], ['imageLeft', '图片靠左'], ['imageCenter', '图片居中'], ['imageRight', '图片靠右'], ['tableLeft', '表格列靠左'], ['tableCenter', '表格列居中'], ['tableRight', '表格列靠右']] as const;
 export type Action = typeof commands[number][0];
-export const defaultColors = ['#ffd400', '#ff6268', '#62ad2e', '#26a7df', '#a68be3', '#e46ae8', '#f49a35', '#aaaaaa'];
+export const defaultColors = ['#fff176', '#ffc2c4', '#c9ffa3', '#a8e5ff', '#dbccff', '#fdbdff', '#ffd9ad', '#dbdbdb'];
 export type ColorProperty = 'color' | 'background-color';
 export function validPalette(value: unknown): value is string[] {
   return Array.isArray(value) && value.length >= 1 && value.length <= 8 && value.every(color => typeof color === 'string' && /^#[\da-f]{6}$/i.test(color));
@@ -44,6 +44,13 @@ export type ThemeDefinition = {
 };
 export type ThemeCatalog = { themes: ThemeDefinition[]; activeTheme: string };
 export type HistoryLocation = { action: 'undo' | 'redo'; offset: number };
+export type SourceLineRange = { start: number; end: number };
+export function linkLineRange(fragment: string): SourceLineRange | undefined {
+  const match = /^L([1-9]\d*)(?:-L([1-9]\d*))?$/i.exec(fragment);
+  if (!match) return;
+  const start = Number(match[1]), end = Number(match[2] ?? match[1]);
+  if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && end >= start) return { start, end };
+}
 export type ExportOptions = {
   format: 'pdf' | 'html' | 'docx'; topMargin: number; toc: boolean; beautify: boolean;
   theme: boolean; paperSize: 'A4' | 'A3' | 'Letter'; font: string; fontSize: number; directory: string;

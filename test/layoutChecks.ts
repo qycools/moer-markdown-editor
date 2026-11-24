@@ -87,7 +87,7 @@ export async function checkLayoutUI(frame: Frame | Page, replaceDocument: (text:
     await frame.locator('[data-action=settings]').click(); await frame.locator('#page-width-select').selectOption('100%'); await frame.locator('#settings-done').click();
     assert.equal(await frame.locator(`.vditor-${value} div[data-type=html-block]`).evaluate(e => getComputedStyle(e, '::before').content), 'none', 'HTML image type badge is hidden');
     await open(1);
-    assert.deepEqual(await frame.locator('.block-menu-main>[data-block-action]').evaluateAll(items => items.map(e => (e as HTMLElement).dataset.blockAction)), ['convert', 'delete', 'copy', 'cut', 'indent', 'add']);
+    assert.deepEqual(await frame.locator('.block-menu-main>[data-block-action]').evaluateAll(items => items.map(e => (e as HTMLElement).dataset.blockAction)), ['convert', 'source', 'delete', 'copy', 'cut', 'indent', 'add']);
     await choose('copy'); assert.match(await clipboard.read(), /First paragraph \*\*bold\*\*\./);
     await open(1); await choose('convert:h2'); await frame.waitForFunction(() => window.VM_APP.getValue().includes('## First paragraph **bold**.'));
     await reset(); await open(1); await choose('cut'); await frame.waitForFunction(() => !window.VM_APP.getValue().includes('First paragraph')); assert.match(await clipboard.read(), /First paragraph/);

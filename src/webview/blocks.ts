@@ -7,7 +7,15 @@ import { headingSelector } from './mindmap';
 const types = [['p', '文本'], ['ordered-list', '有序列表'], ['list', '无序列表'], ['check', '任务列表'], ['code', '代码块'], ['callout', '高亮块'], ['quote', '引用'], ['columns', '分栏'], ['fold', '折叠块']];
 const typeIcons: Record<string, string> = { p: 'headings', 'ordered-list': 'ordered-list', list: 'list', check: 'check', code: 'code', callout: 'backgroundColor', quote: 'quote', columns: 'columns', fold: 'fold' };
 
-export function installBlockMenus(editor: any, options: { submit: () => void; rpc: (type: string, data?: object) => Promise<any>; toast: (text: string, error?: boolean) => void; beforeOpen: () => void; menuState: (open: boolean) => void; openProperties: (block: HTMLElement) => void }) {
+export function installBlockMenus(editor: any, options: {
+  submit: () => void;
+  rpc: (type: string, data?: object) => Promise<any>;
+  toast: (text: string, error?: boolean) => void;
+  beforeOpen: () => void;
+  menuState: (open: boolean) => void;
+  openProperties: (block: HTMLElement) => void;
+  editSource: (block: HTMLElement) => void;
+}) {
   const handles = new Map<HTMLElement, HTMLButtonElement>(), layers = new Map<HTMLElement, HTMLElement>();
   let menu: HTMLElement | undefined, activeBlock: HTMLElement | undefined, scheduled = false;
   let hoveredHeading: HTMLButtonElement | undefined;
@@ -105,6 +113,7 @@ export function installBlockMenus(editor: any, options: { submit: () => void; rp
     const block = activeBlock; if (!block?.isConnected) return;
     if (['convert', 'indent', 'add'].includes(action)) { submenu(action); return; }
     if (action === 'properties') { close(); options.openProperties(block); return; }
+    if (action === 'source') { close(); options.editSource(block); return; }
     try {
       const text = markdown(block);
       if (action === 'copy' || action === 'cut') { await options.rpc('clipboardWrite', { text: text + '\n' }); if (action === 'cut' && block.isConnected) remove(block); else { close(); options.toast('段落已复制'); } }
@@ -125,7 +134,11 @@ export function installBlockMenus(editor: any, options: { submit: () => void; rp
   function open(block: HTMLElement, handle: HTMLElement) {
     if (activeBlock === block && menu) { close(); return; }
     close(); options.beforeOpen(); activeBlock = block; handle.setAttribute('aria-expanded', 'true');
-    const buttons = [['convert', 'convert', '转化为', true], ['delete', 'trash', '删除', false], ['copy', 'copy', '复制', false], ['cut', 'cut', '剪切', false], ['indent', 'indent', '缩进', true], ['add', 'add', '在下方添加', true]] as const;
+    const buttons = [
+      ['convert', 'convert', '转化为', true], ['source', 'code', '编辑 Markdown 源码', false],
+      ['delete', 'trash', '删除', false], ['copy', 'copy', '复制', false], ['cut', 'cut', '剪切', false],
+      ['indent', 'indent', '缩进', true], ['add', 'add', '在下方添加', true],
+    ] as const;
     menu = document.createElement('div'); menu.id = 'block-menu'; menu.className = 'block-menu';
     const image = block.querySelector('img');
     const properties = block.tagName === 'TABLE' ? '表格操作' : image && canEditImage(image) ? '图片操作' : '';

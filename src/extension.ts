@@ -2,20 +2,36 @@ import * as vscode from 'vscode';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { expandHome } from './browser';
-import { commands, APP_NAME, defaults, escapeHTML, minimalEdit, PREFIX, VIEW_TYPE, type HistoryLocation, type Settings, validateExport, validPageWidth, validPalette } from './shared';
+import { commands, APP_NAME, defaults, escapeHTML, linkLineRange, minimalEdit, PREFIX, VIEW_TYPE, type HistoryLocation, type Settings, type SourceLineRange, validateExport, validPageWidth, validPalette } from './shared';
 import { exportDocument } from './export';
 import { themeCatalog, clearThemeCache } from './codeTheme';
-import { localImageData } from './localImages';
+import { imageReferenceStatus, localImageData } from './localImages';
+import { hasStagedReferences, stagedImages } from './stagedImages';
+import { writeDocumentArchive } from './documentArchive';
 
-type Session = { panel: vscode.WebviewPanel; document: vscode.TextDocument; queue: Promise<void>; applying: boolean; id: string; dialogOpen: boolean; canGoBack: boolean };
+type Session = { panel: vscode.WebviewPanel; document: vscode.TextDocument; ready: boolean; queue: Promise<void>; applying: boolean; id: string; dialogOpen: boolean; canGoBack: boolean; imageSelected: boolean; tableSelected: boolean };
+type DocumentJump = { type: 'revealLines'; lines: SourceLineRange } | { type: 'revealAnchor'; anchor: string };
 const sessions = new Set<Session>();
 let active: Session | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
+  const images = stagedImages(context);
+  const pendingJumps = new Map<string, { message: DocumentJump; column?: vscode.ViewColumn }>();
+  function revealLinkTarget(session: Session) {
+    if (!session.ready || !session.panel.active) return;
+    const key = session.document.uri.toString();
+    const jump = pendingJumps.get(key);
+    if (!jump || (jump.column !== undefined && jump.column !== session.panel.viewColumn)) return;
+    pendingJumps.delete(key);
+    void session.panel.webview.postMessage(jump.message);
+  }
   const setActive = (session?: Session) => {
     active = session;
+    if (session) revealLinkTarget(session);
     void vscode.commands.executeCommand('setContext', 'vditorMarkdown.dialogOpen', session?.dialogOpen ?? false);
     void vscode.commands.executeCommand('setContext', 'vditorMarkdown.canGoBack', session?.canGoBack ?? false);
+    void vscode.commands.executeCommand('setContext', 'vditorMarkdown.imageSelected', session?.imageSelected ?? false);
+    void vscode.commands.executeCommand('setContext', 'vditorMarkdown.tableSelected', session?.tableSelected ?? false);
   };
   const settings = (uri?: vscode.Uri): Settings => {
     const config = vscode.workspace.getConfiguration(PREFIX, uri);
@@ -31,7 +47,7 @@ export function activate(context: vscode.ExtensionContext) {
   };
   const provider: vscode.CustomTextEditorProvider = {
     async resolveCustomTextEditor(document, panel) {
-      const session: Session = { document, panel, queue: Promise.resolve(), applying: false, id: randomBytes(8).toString('hex'), dialogOpen: false, canGoBack: false };
+      const session: Session = { document, panel, ready: false, queue: Promise.resolve(), applying: false, id: randomBytes(8).toString('hex'), dialogOpen: false, canGoBack: false, imageSelected: false, tableSelected: false };
       sessions.add(session);
       if (panel.active) setActive(session);
       const documentDirectory = vscode.Uri.joinPath(document.uri, '..');
@@ -70,7 +86,11 @@ export function activate(context: vscode.ExtensionContext) {
         switch (message.type) {
           case 'ready':
             await panel.webview.postMessage({ type: 'document', text: document.getText(), version: document.version, initial: true });
-            await sendConfig(s); break;
+            void images.finalize(document);
+            await sendConfig(s);
+            s.ready = true;
+            revealLinkTarget(s);
+            break;
           case 'edit': {
             if (typeof message.text !== 'string' || typeof message.baseText !== 'string' || message.text.length > 32 * 1024 * 1024) throw new Error('文档同步消息无效。');
             const current = document.getText();
@@ -107,14 +127,60 @@ export function activate(context: vscode.ExtensionContext) {
             if (typeof message.text !== 'string') throw new Error('剪贴板内容无效。');
             await vscode.env.clipboard.writeText(message.text); await reply(true); break;
           case 'localImage':
-            await reply(typeof message.source === 'string' ? await localImageData(message.source, document.uri, imageRoots) ?? null : null);
+            await reply(typeof message.source === 'string' ? await images.data(message.source, document.uri) ?? await localImageData(message.source, document.uri, imageRoots) ?? null : null);
             break;
+          case 'checkImages': {
+            const { sources } = message;
+            if (!Array.isArray(sources) || !sources.every(source => typeof source === 'string')) throw new Error('图片引用列表无效。');
+            const result = { available: 0, ignored: 0, missing: [] as string[], unverified: [] as string[] };
+            for (const source of new Set<string>(sources)) {
+              const status = await images.status(source, document.uri) ?? await imageReferenceStatus(source, document.uri, imageRoots);
+              if (status === 'available' || status === 'ignored') result[status]++;
+              else result[status].push(source);
+            }
+            await reply(result); break;
+          }
+          case 'cleanStagedImages':
+            await reply(await images.cleanup(document.uri)); break;
+          case 'archiveDocument': {
+            if (!vscode.workspace.isTrusted) throw new Error('请先信任工作区再打包文档。');
+            if (document.isUntitled || document.uri.scheme !== 'file') throw new Error('请先将 Markdown 保存为本地文件。');
+            const text = document.getText();
+            if (hasStagedReferences(text)) throw new Error('请先保存文档并确认暂存图片已整理到 assets。');
+            const stem = path.basename(document.uri.fsPath, path.extname(document.uri.fsPath));
+            const target = await vscode.window.showSaveDialog({
+              defaultUri: vscode.Uri.joinPath(documentDirectory, `${stem}.zip`), filters: { ZIP: ['zip'] },
+              saveLabel: '打包 Markdown 和 assets',
+            });
+            if (!target) { await reply({ cancelled: true }); break; }
+            if (target.scheme !== 'file' || path.extname(target.fsPath).toLowerCase() !== '.zip') throw new Error('请选择本地 .zip 文件。');
+            const relative = path.relative(path.join(documentDirectory.fsPath, 'assets'), target.fsPath);
+            if (!path.isAbsolute(relative) && relative.split(path.sep)[0] !== '..') throw new Error('请选择 assets 文件夹外的打包位置。');
+            const temporary = target.with({ path: target.path + '.' + randomBytes(8).toString('hex') + '.tmp' });
+            try {
+              const stats = await writeDocumentArchive(document.uri.fsPath, text, temporary.fsPath);
+              await vscode.workspace.fs.rename(temporary, target, { overwrite: false });
+              await reply({ path: target.fsPath, ...stats });
+            } catch (error) {
+              await vscode.workspace.fs.delete(temporary).then(undefined, () => {});
+              throw error;
+            }
+            break;
+          }
           case 'dialog':
             s.dialogOpen = !!message.open;
             if (panel.active) await vscode.commands.executeCommand('setContext', 'vditorMarkdown.dialogOpen', s.dialogOpen); break;
           case 'linkHistory':
             s.canGoBack = message.canGoBack === true;
             if (panel.active) await vscode.commands.executeCommand('setContext', 'vditorMarkdown.canGoBack', s.canGoBack);
+            break;
+          case 'imageSelection':
+            s.imageSelected = message.selected === true;
+            if (panel.active) await vscode.commands.executeCommand('setContext', 'vditorMarkdown.imageSelected', s.imageSelected);
+            break;
+          case 'tableSelection':
+            s.tableSelected = message.selected === true;
+            if (panel.active) await vscode.commands.executeCommand('setContext', 'vditorMarkdown.tableSelected', s.tableSelected);
             break;
           case 'setting': {
             if (!(message.key in defaults) || typeof message.value !== typeof defaults[message.key as keyof Settings]) throw new Error('设置项无效。');
@@ -187,29 +253,54 @@ export function activate(context: vscode.ExtensionContext) {
           }
           case 'image': {
             if (!vscode.workspace.isTrusted) throw new Error('请先信任工作区再保存图片。');
-            if (document.isUntitled) throw new Error('请先保存 Markdown 文件，再插入本地图片。');
             if (typeof message.data !== 'string' || message.data.length > 28 * 1024 * 1024 || !/^image\/(png|jpeg|gif|webp|bmp)$/.test(message.mime)) throw new Error('仅支持 20MB 以内的 PNG、JPEG、GIF、WebP 和 BMP 图片。');
-            const ext = message.mime.split('/')[1].replace('jpeg', 'jpg');
-            const filename = `image-${Date.now()}-${randomBytes(3).toString('hex')}.${ext}`;
-            const folder = vscode.Uri.file(path.join(sourceDirFor(document), 'assets'));
-            await vscode.workspace.fs.createDirectory(folder);
-            await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(folder, filename), Buffer.from(message.data, 'base64'));
-            await reply(`assets/${filename}`); break;
+            await reply(await images.write(document, message.mime, Buffer.from(message.data, 'base64'))); break;
           }
           case 'openLink': {
             if (typeof message.href !== 'string' || !message.href) return;
             const href = message.href;
+            const tab = { viewColumn: panel.viewColumn, preview: false };
             const scheme = /^[a-z][a-z\d+.-]*:/i.exec(href)?.[0].toLowerCase();
             if (scheme === 'http:' || scheme === 'https:' || scheme === 'mailto:' || href.startsWith('//')) {
               await vscode.env.openExternal(vscode.Uri.parse(href.startsWith('//') ? `https:${href}` : href));
-            } else if (scheme === 'file:') await vscode.commands.executeCommand('vscode.open', vscode.Uri.parse(href));
+              break;
+            }
+            const parts = vscode.Uri.parse(href);
+            let target: vscode.Uri;
+            if (scheme === 'file:') target = parts;
             else if (!scheme || (process.platform === 'win32' && /^[a-z]:[\\/]/i.test(href))) {
-              const parts = vscode.Uri.parse(href);
               const spelling = href.split(/[?#]/, 1)[0];
               let filename = spelling;
               try { filename = decodeURIComponent(spelling); } catch { /* A literal percent is valid in a filename. */ }
-              const target = vscode.Uri.file(path.resolve(sourceDirFor(document), filename)).with({ fragment: parts.fragment, query: parts.query });
-              await vscode.commands.executeCommand('vscode.open', target);
+              const file = filename ? vscode.Uri.file(path.resolve(sourceDirFor(document), filename)) : document.uri;
+              target = file.with({ fragment: parts.fragment, query: parts.query });
+            } else break;
+            const lines = linkLineRange(target.fragment);
+            const markdownTarget = /\.(?:md|markdown)$/i.test(target.path) || (target.scheme === 'untitled' && document.languageId === 'markdown');
+            if (lines || (markdownTarget && target.fragment)) {
+              const destination = await Promise.resolve(vscode.workspace.openTextDocument(target.with({ fragment: '', query: '' }))).catch(error => {
+                throw new Error(`无法打开目标文件 ${path.basename(target.fsPath)}。${error instanceof Error ? error.message : String(error)}`);
+              });
+              if (lines && lines.end > destination.lineCount) throw new Error(`${path.basename(destination.uri.fsPath)} 只有 ${destination.lineCount} 行，无法跳转到第 ${lines.end} 行。`);
+              if (markdownTarget || destination.languageId === 'markdown') {
+                const key = destination.uri.toString();
+                const navigation: DocumentJump = lines ? { type: 'revealLines', lines } : { type: 'revealAnchor', anchor: target.fragment };
+                const jump = { message: navigation, column: tab.viewColumn };
+                pendingJumps.set(key, jump);
+                try {
+                  await vscode.commands.executeCommand('vscode.openWith', destination.uri, VIEW_TYPE, tab);
+                  if (active) revealLinkTarget(active);
+                } catch (error) {
+                  if (pendingJumps.get(key) === jump) pendingJumps.delete(key);
+                  throw error;
+                }
+              } else if (lines) {
+                const selection = new vscode.Range(destination.lineAt(lines.start - 1).range.start, destination.lineAt(lines.end - 1).range.end);
+                const editor = await vscode.window.showTextDocument(destination, { ...tab, selection });
+                editor.revealRange(selection, vscode.TextEditorRevealType.AtTop);
+              }
+            } else {
+              await vscode.commands.executeCommand('vscode.open', target, tab);
             }
             break;
           }

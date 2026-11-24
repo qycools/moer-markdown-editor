@@ -1,17 +1,21 @@
 import Vditor from '@local/vditor';
 import { setEditMode } from '@local/mode';
 import { processCodeRender } from '@local/code';
-import { actions, defaults, defaultColors, escapeHTML as esc, exportDefaults, pageWidths, pageWidthPixels, validPageWidth, validPalette, type ColorProperty, type Action, type ExportOptions, type HistoryLocation, type Settings, type ThemeCatalog } from '../shared';
-import { editTextStyles } from './colors';
+import { addScript } from '../../vditor-master/src/ts/util/addScript';
+import { actions, defaults, defaultColors, escapeHTML as esc, exportDefaults, pageWidths, pageWidthPixels, validPageWidth, validPalette, type ColorProperty, type Action, type ExportOptions, type HistoryLocation, type Settings, type SourceLineRange, type ThemeCatalog } from '../shared';
+import { editTextStyles, includeInlineCode } from './colors';
 import { icon } from './icons';
 import { installCodeBlocks } from './codeBlocks';
 import { installThemeMenu, isDarkTheme, themeSelectOptions } from './themes';
 import { installSelectionColors } from './selectionColors';
+import { installSelectionCopy } from './selectionCopy';
+import { writeRichClipboard } from './clipboardHTML';
 import { installOutlineResize } from './outlineResize';
 import { installOutline } from './outline';
 import { installLinks } from './links';
+import { insertLiteralInput } from './literalInput';
 import { formatInline, type InlineFormat } from './inlineFormatting';
-import { normalizeMarkdown, selectMarkdownRange } from './documentPositions';
+import { blockMarkdownOffsets, mapOffsets, markdownOffsets, normalizeMarkdown, reconcileMarkdown, revealPreviewRange, selectMarkdownRange, sourceLineOffsets } from './documentPositions';
 import { installBlockMenus } from './blocks';
 import { installStructures } from './structures';
 import { installColorMenus } from './colorMenus';
@@ -19,7 +23,9 @@ import { installToolbarState } from './toolbarState';
 import { installSearch } from './search';
 import { installContentAdapter, templateFor } from './contentMarkup';
 import { installContentTools } from './contentTools';
-import { installLocalImageFallback } from './imageTools';
+import { applyTableWidths } from './tableWidths';
+import { clipboardImages, installLocalImageFallback, type CommitImageEdit } from './imageTools';
+import { installBlockSourceLayout } from './blockSourceLayout';
 import { buildMindmap, mindmapSvg } from './mindmap';
 import './style.css';
 import './tables.css';
@@ -32,6 +38,7 @@ let editor: any, initialized = false, baseline = '', lastSent = '', version = 0,
 let codeBlocks: ReturnType<typeof installCodeBlocks> | undefined;
 let catalog: ThemeCatalog = { themes: boot.themes || [], activeTheme: boot.activeTheme || '' };
 let selectionColors: ReturnType<typeof installSelectionColors> | undefined;
+let selectionCopy: ReturnType<typeof installSelectionCopy> | undefined;
 let outlineResize: ReturnType<typeof installOutlineResize> | undefined;
 let outlineState: ReturnType<typeof installOutline> | undefined;
 let links: ReturnType<typeof installLinks> | undefined;
@@ -42,6 +49,7 @@ let toolbarState: ReturnType<typeof installToolbarState> | undefined;
 let search: ReturnType<typeof installSearch> | undefined;
 let contentTools: ReturnType<typeof installContentTools> | undefined;
 let mindmapPreview: AbortController | undefined;
+let imageUploads = Promise.resolve();
 let toastTimer = 0;
 let savedRange: Range | undefined, savedTextarea: [number, number] | undefined, previousFocus: HTMLElement | null = null;
 let exportOptions: ExportOptions = { ...exportDefaults };
@@ -77,15 +85,15 @@ function submit(source?: string) {
   search?.refresh(); toolbarState?.refresh();
   const rendered = getValue();
   if (source === undefined && rendered === baseline) return;
+  const text = source === undefined ? reconcileMarkdown(baseline, rendered, lastSent) : source.replace(/\r?\n/g, eol);
   baseline = rendered;
-  const text = source === undefined ? rendered : source.replace(/\r?\n/g, eol);
   if (text === lastSent) return;
   const baseText = lastSent; lastSent = text; seq++; pending.add(seq);
   post('edit', { text, baseText, seq, version });
   updateStatus(); outlineState?.render();
 }
 function applyDocument(text: string, nextVersion: number, history?: HistoryLocation) {
-  selectionColors?.hide(); themeMenu.close(); blockMenus?.close(); colorMenus?.close(); contentTools?.close();
+  selectionColors?.hide(); selectionCopy?.close(); themeMenu.close(); blockMenus?.close(); colorMenus?.close(); contentTools?.close();
   eol = text.includes('\r\n') ? '\r\n' : '\n';
   const surface = getSurface(); const scrollTop = surface?.scrollTop || 0;
   suppress = true;
@@ -98,7 +106,7 @@ function applyDocument(text: string, nextVersion: number, history?: HistoryLocat
       const markdown = normalizeMarkdown(text);
       const offset = normalizeMarkdown(text.slice(0, history.offset)).length;
       surface.focus({ preventScroll: true });
-      selectMarkdownRange(surface, markdown, markdownToEditorDOM, offset, offset, true);
+      selectMarkdownRange(surface, markdown, markdownToEditorDOM, offset, offset, 'center');
       rememberSelection();
       toast(history.action === 'undo' ? '已撤销' : '已重做');
     }
@@ -131,20 +139,82 @@ function markdownToEditorDOM(text: string): string {
   const { currentMode, lute } = editor.vditor;
   return currentMode === 'ir' ? lute.Md2VditorIRDOM(text) : lute.Md2VditorDOM(text);
 }
+function editorDOMToMarkdown(html: string): string {
+  const { currentMode, lute } = editor.vditor;
+  return currentMode === 'ir' ? lute.VditorIRDOM2Md(html) : lute.VditorDOM2Md(html);
+}
+let renderedSplitMarkdown: string | undefined;
+let splitJump: { markdown: string; reveal: () => void } | undefined;
+function revealSplitTarget() {
+  const jump = splitJump;
+  if (!jump || jump.markdown !== renderedSplitMarkdown) return;
+  requestAnimationFrame(() => {
+    if (splitJump !== jump || editor.vditor.currentMode !== 'sv' || jump.markdown !== renderedSplitMarkdown) return;
+    splitJump = undefined;
+    jump.reveal();
+  });
+}
+function revealLinkedLines(lines: SourceLineRange) {
+  const surface = getSurface();
+  if (!surface) return;
+  const split = surface instanceof HTMLTextAreaElement;
+  const markdown = split ? surface.value : normalizeMarkdown(reconcileMarkdown(baseline, getValue(), lastSent));
+  const offsets = sourceLineOffsets(markdown, lines);
+  if (!offsets) return;
+  splitJump = undefined;
+  surface.focus({ preventScroll: true });
+  selectMarkdownRange(surface, markdown, markdownToEditorDOM,
+    split ? offsets.start : offsets.visualStart, split ? offsets.end : offsets.visualEnd, 'top');
+  if (split) {
+    splitJump = { markdown, reveal: () => {
+      const { element, previewElement } = editor.vditor.preview;
+      revealPreviewRange(previewElement, element, markdown, text => editor.vditor.lute.Md2HTML(text), offsets.visualStart, offsets.visualEnd);
+    } };
+    revealSplitTarget();
+  }
+  rememberSelection();
+}
+function missingAnchor(id: string) {
+  toast(`找不到文档内链接目标：${id}`, true);
+}
+function revealLinkedAnchor(id: string) {
+  splitJump = undefined;
+  const surface = getSurface();
+  if (!(surface instanceof HTMLTextAreaElement)) { links?.revealAnchor(id); return; }
+  if (!surface.value.trim()) { missingAnchor(id); return; }
+  if (editor.vditor.preview.element.style.display === 'none') editor.setPreviewMode('both');
+  splitJump = { markdown: surface.value, reveal: () => links?.revealAnchor(id) };
+  revealSplitTarget();
+}
+function applyMarkdownEdit(surface: HTMLElement, { text, start, end }: { text: string; start: number; end: number }) {
+  const top = surface.scrollTop, left = surface.scrollLeft;
+  editor.setValue(text);
+  surface.scrollTop = top; surface.scrollLeft = left;
+  selectMarkdownRange(surface, text, markdownToEditorDOM, start, end);
+  submit(text);
+}
+const commitImageEdit: CommitImageEdit = (node, replacement, update) => {
+  const surface = getSurface(), parent = node.parentNode;
+  if (!surface?.contains(node) || !parent) return false;
+  const markdown = normalizeMarkdown(reconcileMarkdown(baseline, getValue(), lastSent));
+  const index = Array.prototype.indexOf.call(parent.childNodes, node);
+  const offsets = parent === surface
+    ? blockMarkdownOffsets(surface, node, editorDOMToMarkdown, markdown)
+    : markdownOffsets(surface, editorDOMToMarkdown, markdown, [{ node: parent, offset: index }, { node: parent, offset: index + 1 }]);
+  if (!offsets || offsets[0] >= offsets[1]) {
+    toast('无法定位图片源码，图片未更改。', true);
+    return false;
+  }
+  update();
+  submit(markdown.slice(0, offsets[0]) + replacement + markdown.slice(offsets[1]));
+  return true;
+};
 function applyInlineFormat(id: InlineFormat) {
   rememberSelection(); restoreSelection();
   const surface = getSurface()!;
-  const current = getValue(), markdown = normalizeMarkdown(current === baseline ? lastSent : current);
-  const { currentMode, lute } = editor.vditor;
-  const toMarkdown = currentMode === 'ir' ? lute.VditorIRDOM2Md : lute.VditorDOM2Md;
-  const edit = formatInline(surface, id, markdown, toMarkdown, markdownToEditorDOM);
-  if (edit) {
-    const top = surface.scrollTop, left = surface.scrollLeft;
-    editor.setValue(edit.text);
-    surface.scrollTop = top; surface.scrollLeft = left;
-    selectMarkdownRange(surface, edit.text, markdownToEditorDOM, edit.start, edit.end);
-    submit(edit.text);
-  }
+  const markdown = normalizeMarkdown(reconcileMarkdown(baseline, getValue(), lastSent));
+  const edit = formatInline(surface, id, markdown, editorDOMToMarkdown, markdownToEditorDOM);
+  if (edit) applyMarkdownEdit(surface, edit);
   rememberSelection();
   toolbarState?.refresh();
 }
@@ -184,7 +254,10 @@ function applySettings() {
   };
   for (const [key, value] of Object.entries(vars)) document.documentElement.style.setProperty(key, value);
   if (!initialized) return;
-  editor.setTheme(isDark ? 'dark' : 'classic', isDark ? 'dark' : 'light', isDark ? 'github-dark' : 'github');
+  const theme = isDark ? 'dark' : 'classic';
+  const themeChanged = editor.vditor.options.theme !== theme;
+  editor.setTheme(theme, isDark ? 'dark' : 'light', isDark ? 'github-dark' : 'github');
+  if (themeChanged) Vditor.mermaidRender(document.getElementById('editor')!, boot.cdn, theme, true);
   editor.vditor.options.typewriterMode = settings.typewriterMode;
   const width = pageWidthPixels(settings.pageWidth) || getSurface()!.clientWidth;
   editor.vditor.options.preview.maxWidth = Math.max(240, width - 64);
@@ -194,7 +267,7 @@ function applySettings() {
   toolbar.querySelector('[data-action="outline"]')?.setAttribute('aria-pressed', String(settings.outline));
   if (editor.vditor.currentMode !== settings.mode) {
     contentTools?.close();
-    submit(); const text = editor.getValue(); suppress = true;
+    submit(); const text = lastSent; suppress = true;
     setEditMode(editor.vditor, settings.mode, text); baseline = getValue(); suppress = false;
     outlineState?.render(); updateStatus();
   }
@@ -271,12 +344,15 @@ function showMindmap() {
     submit();
   };
 }
-function disposeMindmapPreview() {
+let disposeBlockSource: (() => void) | undefined;
+function disposeDialogPreviews() {
   mindmapPreview?.abort();
   mindmapPreview = undefined;
+  disposeBlockSource?.();
+  disposeBlockSource = undefined;
 }
 function showDialog(title: string, body: string, footer = '', wide = false) {
-  disposeMindmapPreview();
+  disposeDialogPreviews();
   themeMenu.close(); selectionColors?.hide(); blockMenus?.close(); colorMenus?.close(); contentTools?.close();
   rememberSelection(); previousFocus = document.activeElement as HTMLElement;
   overlay.innerHTML = `<div class="scrim"><section class="dialog${wide ? ' wide' : ''}" role="dialog" aria-modal="true" aria-labelledby="dialog-title"><header><h2 id="dialog-title">${title}</h2><button class="close" aria-label="关闭">×</button></header><div class="dialog-body">${body}</div>${footer ? `<footer>${footer}</footer>` : ''}</section></div>`;
@@ -287,11 +363,87 @@ function showDialog(title: string, body: string, footer = '', wide = false) {
 }
 function closeDialog(restoreFocus: boolean | Event = true) {
   if (overlay.querySelector('[data-export-running]')) return;
-  disposeMindmapPreview();
+  disposeDialogPreviews();
   overlay.innerHTML = ''; toolbar.querySelector('[data-action=settings]')!.setAttribute('aria-expanded', 'false'); post('dialog', { open: false }); if (restoreFocus !== false) previousFocus?.focus({ preventScroll: true });
 }
+function editBlockSource(surface: HTMLElement, block: Element) {
+  const markdown = normalizeMarkdown(reconcileMarkdown(baseline, getValue(), lastSent));
+  const offsets = blockMarkdownOffsets(surface, block, editorDOMToMarkdown, markdown);
+  if (!offsets || offsets[0] >= offsets[1]) { toast('无法定位这段内容的 Markdown 源码。', true); return; }
+  const original = markdown.slice(offsets[0], offsets[1]);
+  showDialog('编辑 Markdown 源码', `<div class="vm-block-source-grid">
+    <section><div class="vm-source-heading"><h3 id="block-source-label">源码</h3><button type="button" id="block-source-wrap" aria-pressed="false">${icon('wrap')} 自动换行</button></div>
+    <div class="vm-block-source-pane">
+      <pre class="vm-block-source-highlight" aria-hidden="true"></pre><textarea id="block-source" aria-labelledby="block-source-label" spellcheck="false" wrap="off"></textarea>
+    </div></section>
+    <div class="vm-source-divider" role="separator" tabindex="0" aria-label="调整源码和预览宽度" aria-orientation="vertical" aria-valuemin="20" aria-valuemax="80" aria-valuenow="50"></div>
+    <section><div class="vm-source-heading"><h3 id="block-preview-label">实时预览</h3></div><article class="vm-block-source-preview vditor-reset" aria-labelledby="block-preview-label" tabindex="0"></article></section>
+  </div>`, '<button id="cancel-block-source">取消</button><button id="apply-block-source" class="primary">应用</button><button class="vm-dialog-resizer" type="button" aria-label="调整源码窗口尺寸" title="拖动或使用方向键调整窗口尺寸"></button>', true);
+  const dialog = overlay.querySelector<HTMLElement>('.dialog')!;
+  dialog.classList.add('vm-block-source-dialog');
+  const source = overlay.querySelector<HTMLTextAreaElement>('#block-source')!;
+  const highlight = overlay.querySelector<HTMLElement>('.vm-block-source-highlight')!;
+  const preview = overlay.querySelector<HTMLElement>('.vm-block-source-preview')!;
+  source.value = original;
+  const layout = installBlockSourceLayout(dialog, source, highlight);
+  let frame = 0, diagramTimer = 0, rendered: string | undefined;
+  disposeBlockSource = () => {
+    layout.dispose();
+    cancelAnimationFrame(frame);
+    clearTimeout(diagramTimer);
+  };
+  const render = () => {
+    if (frame || !source.isConnected) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      if (!source.isConnected) return;
+      const hljs = (window as Window & { hljs?: {
+        getLanguage: (language: string) => unknown;
+        highlight: (text: string, options: { language: string }) => { value: string };
+      } }).hljs;
+      if (hljs?.getLanguage('markdown')) {
+        highlight.innerHTML = hljs.highlight(source.value, { language: 'markdown' }).value + '\n';
+        source.parentElement!.classList.add('highlighted');
+        layout.sync();
+      }
+      if (rendered === source.value) return;
+      rendered = source.value;
+      const markup = templateFor(editor.vditor.lute.Md2HTML(rendered)).content;
+      applyTableWidths(markup);
+      preview.replaceChildren(markup);
+      Vditor.mathRender(preview, { cdn: boot.cdn, math: editor.vditor.options.preview.math });
+      clearTimeout(diagramTimer);
+      if (preview.querySelector('.language-mermaid')) diagramTimer = window.setTimeout(() => {
+        if (preview.isConnected) Vditor.mermaidRender(preview, boot.cdn, editor.vditor.options.theme);
+      }, 160);
+    });
+  };
+  source.oninput = render;
+  preview.onclick = event => { if ((event.target as Element).closest('a')) event.preventDefault(); };
+  preview.onauxclick = preview.onclick;
+  void addScript(`${boot.cdn}/dist/js/highlight.js/highlight.min.js?v=11.7.0`, 'vditorHljsScript').then(render, () => {});
+  render();
+  const apply = () => {
+    if (source.value === original) { closeDialog(); return; }
+    const current = normalizeMarkdown(reconcileMarkdown(baseline, getValue(), lastSent));
+    const [start, end] = mapOffsets(markdown, current, offsets);
+    if (surface !== getSurface() || current.slice(start, end) !== original) { toast('这段文字已变更，请关闭后重新打开源码。', true); return; }
+    closeDialog();
+    applyMarkdownEdit(surface, { text: current.slice(0, start) + source.value + current.slice(end), start, end: start });
+  };
+  overlay.querySelector<HTMLButtonElement>('#apply-block-source')!.onclick = apply;
+  overlay.querySelector<HTMLButtonElement>('#cancel-block-source')!.onclick = closeDialog;
+  source.onkeydown = event => { if (event.ctrlKey && event.key === 'Enter' && !event.isComposing) { event.preventDefault(); apply(); } };
+  source.focus();
+}
+function sourceBlock(surface: HTMLElement, node: Node | null) {
+  if (!node || !surface.contains(node)) return;
+  let block = node instanceof Element ? node : node.parentElement;
+  while (block && block !== surface && block.parentElement !== surface) block = block.parentElement;
+  if (block?.matches('[data-block]')) return block;
+}
 function showSettingsMenu(body: string) {
-  disposeMindmapPreview();
+  disposeDialogPreviews();
   themeMenu.close(); selectionColors?.hide(); blockMenus?.close(); colorMenus?.close(); contentTools?.close(); rememberSelection(); previousFocus = document.activeElement as HTMLElement;
   const anchor = toolbar.querySelector<HTMLElement>('[data-action=settings]')!, rect = anchor.getBoundingClientRect();
   overlay.innerHTML = `<section id="settings-menu" class="settings-dropdown" role="region" aria-label="设置"><header><strong>设置</strong><button class="close" aria-label="关闭设置">×</button></header><div class="settings-body">${body}</div><footer><button id="reset-settings">恢复默认</button><button id="settings-done" class="primary">完成</button></footer></section>`;
@@ -338,7 +490,14 @@ function selectedMarkdown(): string {
     ancestor = ancestor.parentElement;
   }
   const html = root.querySelector('p,h1,h2,h3,li') ? root.innerHTML : `<p data-block="0">${root.innerHTML}</p>`;
-  return (editor.vditor.currentMode === 'ir' ? editor.vditor.lute.VditorIRDOM2Md(html) : editor.vditor.lute.VditorDOM2Md(html)).trimEnd();
+  return editorDOMToMarkdown(html).trimEnd();
+}
+function colorMarkup(text: string, property: 'color' | 'background-color', color: string) {
+  return text.split('\n').map(line => {
+    if (!line) return '';
+    const [, prefix, content] = line.match(/^(\s*(?:(?:#{1,6}|>|[-+*]|\d+[.)])\s+)*(?:\[[ xX]\]\s+)?)(.*)$/)!;
+    return `${prefix}<span style="${property}: ${color}">${content}</span>`;
+  }).join('\n');
 }
 function setColor(property: 'color' | 'background-color', color: string | null) {
   restoreSelection();
@@ -353,15 +512,25 @@ function setColor(property: 'color' | 'background-color', color: string | null) 
       else { tokens.forEach(t => t.remove()); span.replaceWith(...span.childNodes); }
       surface.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'formatFontColor' })); submit(); return;
     }
+    const selection = getSelection();
+    const range = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : undefined;
+    if (color && range && surface.contains(range.commonAncestorContainer) && includeInlineCode(range)) {
+      const markdown = normalizeMarkdown(reconcileMarkdown(baseline, getValue(), lastSent));
+      const offsets = markdownOffsets(surface, editorDOMToMarkdown, markdown, [
+        { node: range.startContainer, offset: range.startOffset }, { node: range.endContainer, offset: range.endOffset },
+      ]);
+      if (offsets && offsets[0] < offsets[1]) {
+        const [start, end] = offsets;
+        const marked = colorMarkup(markdown.slice(start, end), property, color);
+        applyMarkdownEdit(surface, { text: markdown.slice(0, start) + marked + markdown.slice(end), start: start + marked.length, end: start + marked.length });
+      } else toast('无法定位行内代码选区，请重新选中文字。', true);
+      return;
+    }
   }
   let text = selectedMarkdown();
   if (!text) { toast('请先选中需要设置颜色的文字。'); return; }
   if (color === null) text = text.replace(/<span\s+style=["'][^"']*(?:color|background-color)[^"']*["']\s*>|<\/span\s*>/gi, '');
-  else text = text.split('\n').map(line => {
-    if (!line) return '';
-    const [, prefix, content] = line.match(/^(\s*(?:(?:#{1,6}|>|[-+*]|\d+[.)])\s+)*(?:\[[ xX]\]\s+)?)(.*)$/)!;
-    return `${prefix}<span style="${property}: ${color}">${content}</span>`;
-  }).join('\n');
+  else text = colorMarkup(text, property, color);
   editor.insertMD(text); submit();
 }
 function palette(property: ColorProperty) {
@@ -387,7 +556,7 @@ function showSettings() {
   <h3>排版</h3><div class="settings-group">${row('字体', select('fontFamily', fonts))}${row('粗体颜色', select('boldColor', [['', '默认'], ['#007c91', '青色'], ['#1971c2', '蓝色'], ['#e53935', '红色'], ['#7048e8', '紫色']]))}${row('页面宽度', pageWidthControl())}${row('行高', stepper('lineHeight', '', 0.1, 1, 3))}${row('打字机模式', `<input type="checkbox" class="switch" data-setting="typewriterMode" ${settings.typewriterMode ? 'checked' : ''} aria-label="打字机模式">`)}</div>
   <h3>代码块</h3><div class="settings-group">${row('字体', select('codeFontFamily', fonts))}${row('主题', `<select data-setting="codeTheme">${themeSelectOptions(catalog, settings.codeTheme)}</select>`)}${row('最大高度', select('codeMaxHeight', [['none', '默认'], ['240px', '240px'], ['400px', '400px'], ['60vh', '60vh']]))}</div>
   <h3>图片尺寸</h3><div class="settings-group">${row('最大宽度', stepper('imageMaxWidth', '%', 5, 10, 100))}${row('最大高度', stepper('imageMaxHeight', 'vh', 5, 10, 100))}</div>
-  <h3>更多功能</h3><div class="extra-tools"><button data-extra="image">插入图片</button><button data-extra="emoji">表情</button><button data-extra="line">分隔线</button><button data-extra="inline-code">行内代码</button><button data-extra="outdent">减少缩进</button><button data-extra="indent">增加缩进</button><button data-extra="preview">预览</button></div>
+  <h3>更多功能</h3><div class="extra-tools"><button data-extra="image">插入图片</button><button data-extra="image-resources">图片资源</button><button data-extra="emoji">表情</button><button data-extra="line">分隔线</button><button data-extra="inline-code">行内代码</button><button data-extra="outdent">减少缩进</button><button data-extra="indent">增加缩进</button><button data-extra="preview">预览</button></div>
   <h3>导出浏览器</h3><label class="browser-path">Edge / Chrome 路径<input data-setting="browserPath" value="${esc(settings.browserPath)}" placeholder="留空自动检测本机浏览器"></label>`);
   bindPageWidth();
   overlay.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-setting]').forEach(input => input.onchange = () => { void changeSetting(input.dataset.setting as keyof Settings, input instanceof HTMLInputElement && input.type === 'checkbox' ? input.checked : input.value); });
@@ -402,6 +571,7 @@ function showSettings() {
   overlay.querySelectorAll<HTMLElement>('[data-extra]').forEach(b => b.onclick = () => {
     closeDialog();
     if (b.dataset.extra === 'image') insertImage();
+    else if (b.dataset.extra === 'image-resources') showImageResources();
     else if (b.dataset.extra === 'emoji') {
       showDialog('插入表情', `<div class="emoji-picker">${['😀', '😊', '👍', '❤️', '🎉', '🚀', '✅', '⚠️', '💡', '📌', '📝', '🔥', '👀', '🙏', '✨', '🐱'].map(emoji => `<button data-emoji="${emoji}">${emoji}</button>`).join('')}</div>`);
       overlay.querySelectorAll<HTMLElement>('[data-emoji]').forEach(button => button.onclick = () => { const emoji = button.dataset.emoji; closeDialog(); restoreSelection(); editor.insertMD(emoji); submit(); });
@@ -443,21 +613,108 @@ function showExport() {
   };
 }
 function insertImage() {
+  const location = imageLocation();
   const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/png,image/jpeg,image/gif,image/webp,image/bmp'; input.multiple = true;
-  input.onchange = () => { if (input.files) void uploadImages([...input.files]); }; input.click();
+  input.onchange = () => { if (input.files) uploadImages([...input.files], location); }; input.click();
 }
-async function uploadImages(files: File[]) {
-  for (const file of files) {
-    if (file.size > 20 * 1024 * 1024) { toast('图片不能超过 20MB。', true); continue; }
-    try {
-      const data = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.onerror = reject; reader.readAsDataURL(file); });
-      const relative = await rpc('image', { data, mime: file.type });
-      restoreSelection(); editor.insertMD(`![${file.name.replace(/[\[\]]/g, '')}](<${relative}>)`); submit();
-    } catch (error) { toast((error as Error).message, true); }
-  }
+function showImageResources() {
+  showDialog('图片资源', `<div class="extra-tools">
+    <button id="check-image-references">检查图片引用</button>
+    <button id="clean-staged-images">清理暂存图片</button>
+    <button id="archive-document">打包 Markdown 和 assets</button>
+  </div><p class="muted">ZIP 包保留 Markdown 文件名和旁边的 assets 目录结构。</p>
+  <div id="image-resource-results" role="status"></div>`);
+  const results = overlay.querySelector<HTMLElement>('#image-resource-results')!;
+  const buttons = [...overlay.querySelectorAll<HTMLButtonElement>('.extra-tools button')];
+  const bind = (id: string, pending: string, run: () => Promise<void>) => {
+    const button = overlay.querySelector<HTMLButtonElement>(id)!;
+    button.onclick = async () => {
+      buttons.forEach(button => { button.disabled = true; });
+      results.textContent = pending;
+      try { await run(); }
+      catch (error) { results.textContent = error instanceof Error ? error.message : String(error); }
+      finally { buttons.forEach(button => { button.disabled = false; }); }
+    };
+  };
+  bind('#check-image-references', '正在检查图片引用…', async () => {
+    const markdown = reconcileMarkdown(baseline, getValue(), lastSent);
+    const markup = templateFor(editor.vditor.lute.Md2HTML(markdown)).content;
+    const sources = [...new Set([...markup.querySelectorAll('img[src]')].map(image => image.getAttribute('src')!))];
+    const report = await rpc('checkImages', { sources });
+    results.textContent = `有效 ${report.available} 项，失效 ${report.missing.length} 项，未能验证 ${report.unverified.length} 项，已跳过网络或内嵌图片 ${report.ignored} 项。`;
+    for (const [label, paths] of [['失效引用', report.missing], ['未能验证', report.unverified]] as [string, string[]][]) {
+      if (!paths.length) continue;
+      const title = document.createElement('h3'), list = document.createElement('ul');
+      title.textContent = label;
+      for (const path of paths) {
+        const item = document.createElement('li');
+        item.textContent = path;
+        list.append(item);
+      }
+      results.append(title, list);
+    }
+  });
+  bind('#clean-staged-images', '正在核对暂存图片及已保存副本…', async () => {
+    const result = await rpc('cleanStagedImages');
+    results.textContent = result.cancelled ? '已取消清理。' : result.removed || result.failed
+      ? `已移入回收站 ${result.removed} 张，清理失败 ${result.failed} 张。` : '没有可清理的暂存图片。';
+  });
+  bind('#archive-document', '请选择 ZIP 包的保存位置…', async () => {
+    submit();
+    const result = await rpc('archiveDocument');
+    results.textContent = result.cancelled ? '已取消打包。' : `已打包 Markdown 和 ${result.files} 个资源文件${result.skipped ? `，跳过 ${result.skipped} 个链接或非普通文件` : ''}。\n${result.path}`;
+  });
+}
+function imageLocation() {
+  const surface = getSurface();
+  const markdown = normalizeMarkdown(reconcileMarkdown(baseline, getValue(), lastSent));
+  if (surface instanceof HTMLTextAreaElement) return { markdown, offsets: [surface.selectionStart, surface.selectionEnd] };
+  const selection = getSelection();
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : savedRange;
+  const offsets = range && surface?.contains(range.commonAncestorContainer) ? markdownOffsets(surface, editorDOMToMarkdown, markdown, [
+    { node: range.startContainer, offset: range.startOffset }, { node: range.endContainer, offset: range.endOffset },
+  ]) : undefined;
+  return { markdown, offsets: offsets || [markdown.length, markdown.length] };
+}
+function uploadImages(files: File[], location = imageLocation()) {
+  imageUploads = imageUploads.then(async () => {
+    const images: string[] = [];
+    let lastImage = '';
+    for (const file of files) {
+      if (file.size > 20 * 1024 * 1024) { toast('图片不能超过 20MB。', true); continue; }
+      try {
+        const data = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]);
+          reader.onerror = () => reject(reader.error); reader.readAsDataURL(file);
+        });
+        lastImage = await rpc('image', { data, mime: file.type });
+        images.push(`![${(file.name || '图片').replace(/[\\\[\]\r\n]/g, '')}](${lastImage})`);
+      } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
+    }
+    const surface = getSurface(); if (!surface || !images.length) return;
+    const markdown = normalizeMarkdown(reconcileMarkdown(baseline, getValue(), lastSent));
+    const [start, end] = mapOffsets(location.markdown, markdown, location.offsets);
+    const inserted = images.join(' '), caret = start + inserted.length;
+    applyMarkdownEdit(surface, { text: markdown.slice(0, start) + inserted + markdown.slice(end), start: caret, end: caret });
+    const image = [...surface.querySelectorAll('img')].find(element => element.getAttribute('src') === lastImage);
+    if (image) {
+      const range = document.createRange(); range.setStartAfter(image.closest('[data-type=img],.vm-inline-image') || image); range.collapse(true);
+      const selection = getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
+    }
+    rememberSelection();
+  }).catch(error => toast(error instanceof Error ? error.message : String(error), true));
 }
 function action(id: Action) {
   if (!initialized) return;
+  selectionCopy?.close();
+  if (id === 'imageLeft' || id === 'imageCenter' || id === 'imageRight') {
+    contentTools?.alignImage(id === 'imageLeft' ? 'left' : id === 'imageCenter' ? 'center' : 'right');
+    return;
+  }
+  if (id === 'tableLeft' || id === 'tableCenter' || id === 'tableRight') {
+    contentTools?.alignTable(id === 'tableLeft' ? 'left' : id === 'tableCenter' ? 'center' : 'right');
+    return;
+  }
   contentTools?.close();
   if (id === 'linkBack') return links?.back();
   if (['save', 'source', 'undo', 'redo'].includes(id)) { submit(); post(id); return; }
@@ -466,6 +723,17 @@ function action(id: Action) {
   if (id === 'headings') return showHeadingDialog();
   if (id === 'textColor' || id === 'backgroundColor') return colorMenus?.showPalette(toolbar.querySelector<HTMLElement>(`[data-action=${id}]`)!, id === 'textColor' ? 'color' : 'background-color');
   if (id === 'settings') return showSettings();
+  if (id === 'imageResources') return showImageResources();
+  if (id === 'blockSource') {
+    const surface = getSurface();
+    if (!surface || surface instanceof HTMLTextAreaElement || overlay.childElementCount) return;
+    const selection = getSelection();
+    const cursor = selection?.focusNode === surface ? surface.childNodes[selection.focusOffset] || surface.lastChild : selection?.focusNode;
+    const block = sourceBlock(surface, cursor || null) || sourceBlock(surface, savedRange?.startContainer || null);
+    if (block) editBlockSource(surface, block);
+    else toast('请先将光标放在要编辑的内容块内。');
+    return;
+  }
   if (id === 'export') return showExport();
   if (id === 'theme') return showTheme();
   if (id === 'brightness') {
@@ -481,6 +749,15 @@ function action(id: Action) {
 toolbar.addEventListener('pointerdown', e => { rememberSelection(); if ((e.target as Element).closest('button')) e.preventDefault(); });
 toolbar.addEventListener('click', e => { const button = (e.target as Element).closest<HTMLElement>('[data-action]'); if (button) action(button.dataset.action as Action); });
 document.addEventListener('selectionchange', rememberSelection);
+document.addEventListener('click', event => {
+  if (event.button !== 0 || event.ctrlKey || event.detail !== 4 || overlay.childElementCount || !(event.target instanceof Element)) return;
+  const surface = getSurface();
+  if (!(surface instanceof HTMLElement) || surface instanceof HTMLTextAreaElement || !surface.contains(event.target) || event.target.closest('img,button,input,textarea,[data-vm-editable]')) return;
+  const block = sourceBlock(surface, event.target);
+  if (!block) return;
+  event.preventDefault(); event.stopImmediatePropagation();
+  editBlockSource(surface, block);
+}, true);
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (!e.defaultPrevented && !e.isComposing && overlay.childElementCount) { e.preventDefault(); closeDialog(); }
@@ -488,7 +765,7 @@ document.addEventListener('keydown', e => {
     return;
   }
   if (e.key === 'Tab' && overlay.querySelector('.scrim')) {
-    const focusable = [...overlay.querySelectorAll<HTMLElement>('button:not(:disabled),input:not([type=hidden]):not(:disabled),select:not(:disabled)')];
+    const focusable = [...overlay.querySelectorAll<HTMLElement>('button:not(:disabled),input:not([type=hidden]):not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]')].filter(element => element.getClientRects().length);
     const first = focusable[0], last = focusable.at(-1);
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
@@ -500,16 +777,33 @@ document.addEventListener('pointerdown', event => {
 });
 window.addEventListener('resize', () => { if (overlay.querySelector('#settings-menu')) closeDialog(false); });
 document.addEventListener('beforeinput', e => {
-  if (window.acquireVsCodeApi && !overlay.childElementCount && getSurface()?.contains(e.target as Node) && (e.inputType === 'historyUndo' || e.inputType === 'historyRedo')) {
+  const surface = getSurface();
+  if (!surface || overlay.childElementCount || !surface.contains(e.target as Node)) return;
+  if (window.acquireVsCodeApi && (e.inputType === 'formatBold' || e.inputType === 'formatItalic')) {
+    e.preventDefault(); e.stopImmediatePropagation();
+  } else if (window.acquireVsCodeApi && (e.inputType === 'historyUndo' || e.inputType === 'historyRedo')) {
     e.preventDefault(); e.stopImmediatePropagation(); action(e.inputType === 'historyUndo' ? 'undo' : 'redo');
+  } else {
+    insertLiteralInput(e, surface, markdownToEditorDOM, () => commitLiteralInput(surface, e.data));
   }
 }, true);
+document.addEventListener('compositionend', event => {
+  const surface = getSurface();
+  if (surface && !overlay.childElementCount) insertLiteralInput(event, surface, markdownToEditorDOM, () => {
+    editor.vditor[editor.vditor.currentMode].composingLock = false;
+    commitLiteralInput(surface, event.data);
+  });
+}, true);
+function commitLiteralInput(surface: HTMLElement, data: string | null) {
+  editor.vditor[editor.vditor.currentMode].preventInput = true;
+  surface.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data }));
+  submit();
+}
 
 document.addEventListener('paste', e => {
   if (!getSurface()?.contains(e.target as Node)) return;
-  let files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/'));
-  if (!files.length) files = [...(e.clipboardData?.items || [])].filter(item => item.kind === 'file' && item.type.startsWith('image/')).map(item => item.getAsFile()).filter((file): file is File => !!file);
-  if (files.length) { e.preventDefault(); e.stopImmediatePropagation(); rememberSelection(); void uploadImages(files); }
+  const files = clipboardImages(e.clipboardData);
+  if (files.length) { e.preventDefault(); e.stopImmediatePropagation(); uploadImages(files); }
 }, true);
 document.addEventListener('drop', e => {
   const files = [...(e.dataTransfer?.files || [])].filter(f => f.type.startsWith('image/'));
@@ -524,42 +818,55 @@ window.addEventListener('message', e => {
     if (m.initial || m.text !== lastSent || m.history) applyDocument(m.text, m.version, m.history); else version = m.version;
   } else if (m.type === 'ack') { pending.delete(m.seq); version = m.version; updateStatus(); }
   else if (m.type === 'saved') toast('已保存');
+  else if (m.type === 'revealLines' && initialized) revealLinkedLines(m.lines);
+  else if (m.type === 'revealAnchor' && initialized && typeof m.anchor === 'string') revealLinkedAnchor(m.anchor);
   else if (m.type === 'command') action(m.action);
   else if (m.type === 'config') { settings = { ...defaults, ...m.settings, ...Object.fromEntries([...pendingSettings].map(([key, update]) => [key, update.value])) }; dark = m.dark; catalog = { themes: m.themes || catalog.themes, activeTheme: m.activeTheme || catalog.activeTheme }; exportOptions = { ...exportDefaults, ...m.exportDefaults }; applySettings(); }
 });
 applySettings();
 installLocalImageFallback(document.getElementById('editor')!, source => rpc('localImage', { source }));
+installLocalImageFallback(overlay, source => rpc('localImage', { source }));
 editor = new Vditor('editor', {
   cdn: boot.cdn, lang: 'zh_CN', mode: settings.mode, height: '100%', cache: { enable: false },
   theme: document.documentElement.dataset.mode === 'dark' ? 'dark' : 'classic',
   value: '', placeholder: '开始书写 Markdown…', outline: { enable: false },
   link: { isOpen: false },
+  image: { isPreview: false },
   toolbar: nativeTools.map(name => ({ name, hotkey: '' })), toolbarConfig: { hide: true },
-  preview: { editOnDoubleClick: true, maxWidth: 1200, delay: 200, math: { engine: 'KaTeX' }, markdown: { sanitize: true, toc: true, mark: true }, theme: { current: 'light', path: `${boot.cdn}/dist/css/content-theme` } },
+  preview: { editOnDoubleClick: true, maxWidth: 1200, delay: 200, math: { engine: 'KaTeX' }, markdown: { sanitize: true, toc: true, mark: true }, theme: { current: 'light', path: `${boot.cdn}/dist/css/content-theme` },
+    transform: (html: string) => { const template = templateFor(html); applyTableWidths(template.content); return template.innerHTML; },
+    parse: () => {
+      if (editor?.vditor.currentMode === 'sv') {
+        renderedSplitMarkdown = editor.vditor.sv.element.value;
+        revealSplitTarget();
+      }
+    },
+  },
   input: () => { submit(); },
   after: () => {
     editor.vditor.lute.SetHeadingID(true);
     installContentAdapter(editor.vditor.lute);
+    const getPreview = () => {
+      const { element, previewElement } = editor.vditor.preview;
+      return element.style.display !== 'none' ? { scroll: element, content: previewElement } : undefined;
+    };
     links = installLinks({
       surface: () => {
-        if (editor.vditor.currentMode === 'sv') {
-          const { element, previewElement } = editor.vditor.preview;
-          return { scroll: element, content: previewElement };
-        }
+        if (editor.vditor.currentMode === 'sv') return getPreview();
         const surface = getSurface();
         return surface && { scroll: surface, content: surface };
       },
+      preview: getPreview,
       base: boot.base,
       markdown: getValue,
       markdownToHTML: text => editor.vditor.lute.Md2HTML(text),
       open: href => post('openLink', { href }),
       historyChanged: canGoBack => post('linkHistory', { canGoBack }),
-      missing: id => toast(`找不到文档内链接目标：${id}`, true),
+      missing: missingAnchor,
     });
     toolbarState = installToolbarState(toolbar, editor.vditor.toolbar.element, overlay, getSurface);
     search = installSearch(toolbar, {
       surface: getSurface,
-      lineHeight: () => settings.editorFontSize * settings.lineHeight,
       commit(text = editor.getValue()) {
         const surface = getSurface()!, top = surface.scrollTop, left = surface.scrollLeft;
         editor.setValue(text);
@@ -571,8 +878,21 @@ editor = new Vditor('editor', {
     structures = installStructures(editor, submit);
     const menuState = (open: boolean) => post('dialog', { open });
     const closeMenus = () => { closeDialog(false); themeMenu.close(); colorMenus?.close(); selectionColors?.hide(); };
-    contentTools = installContentTools(editor, { surface: getSurface, submit, toast, menuState, copy: text => rpc('clipboardWrite', { text }), beforeOpen: () => { closeMenus(); blockMenus?.close(); } });
-    blockMenus = installBlockMenus(editor, { submit, rpc, toast, menuState, openProperties: contentTools.openForBlock, beforeOpen: () => { closeMenus(); contentTools?.close(); } });
+    contentTools = installContentTools(editor, {
+      surface: getSurface, submit, commitImageEdit, toast, copy: text => rpc('clipboardWrite', { text }),
+      imageSelection: selected => post('imageSelection', { selected }),
+      tableSelection: selected => post('tableSelection', { selected }),
+      beforeOpen: () => { closeMenus(); blockMenus?.close(); },
+    });
+    blockMenus = installBlockMenus(editor, {
+      submit, rpc, toast, menuState, openProperties: contentTools.openForBlock,
+      editSource: target => {
+        const surface = getSurface();
+        const block = surface && sourceBlock(surface, target);
+        if (surface && block) { surface.focus({ preventScroll: true }); editBlockSource(surface, block); }
+      },
+      beforeOpen: () => { closeMenus(); contentTools?.close(); },
+    });
     colorMenus = installColorMenus({ surface: getSurface, palette, changePalette: (property, colors) => { void changeSetting(property === 'color' ? 'textColors' : 'backgroundColors', colors); }, edit: (target, styles) => {
       try { const caret = editTextStyles(target, styles, editor.vditor.lute, editor.vditor.currentMode); for (const preview of caret.querySelectorAll<HTMLElement>('.vditor-ir__preview[data-render="2"]')) processCodeRender(preview, editor.vditor); const surface = getSurface()!; surface.focus({ preventScroll: true }); const range = document.createRange(); range.selectNodeContents(caret); range.collapse(false); getSelection()!.removeAllRanges(); getSelection()!.addRange(range); surface.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'formatFontColor' })); submit(); }
       catch (error) { toast((error as Error).message, true); }
@@ -588,6 +908,18 @@ editor = new Vditor('editor', {
     });
     initialized = true; baseline = getValue(); applySettings(); post('ready');
     selectionColors = installSelectionColors({ surface: getSurface, palette, blocked: () => !!overlay.childElementCount || themeMenu.isOpen() || !!blockMenus?.isOpen() || !!colorMenus?.isOpen() || !!contentTools?.isOpen(), remember: rememberSelection, apply: setColor });
+    selectionCopy = installSelectionCopy({
+      surface: getSurface, markdown: () => normalizeMarkdown(reconcileMarkdown(baseline, getValue(), lastSent)),
+      toMarkdown: editorDOMToMarkdown, toHTML: text => editor.vditor.lute.Md2HTML(text), fallback: selectedMarkdown, blocked: () => !!overlay.childElementCount,
+      beforeOpen: () => { closeMenus(); blockMenus?.close(); contentTools?.close(); },
+      write: async (text, html) => {
+        try {
+          if (html !== undefined && await writeRichClipboard(text, html)) { toast('已复制 Markdown 源码'); return; }
+          await rpc('clipboardWrite', { text });
+          toast(html === undefined ? '已复制纯文本' : '已复制 Markdown 源码，富文本写入失败');
+        } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
+      },
+    });
     window.VM_APP = { editor, action, getValue, applyDocument, submit, settings: () => settings, documentVersion: () => version, ready: true };
   },
 });

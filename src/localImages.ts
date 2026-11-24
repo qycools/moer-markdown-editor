@@ -1,4 +1,4 @@
-import { open, realpath } from 'node:fs/promises';
+import { open, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import * as vscode from 'vscode';
 
@@ -13,33 +13,46 @@ function inside(root: string, filename: string) {
   return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
 }
 
-export async function localImageData(source: string, document: vscode.Uri, roots: readonly vscode.Uri[]) {
+async function resolveLocalImage(source: string, document: vscode.Uri, roots: readonly vscode.Uri[]) {
   if (document.scheme !== 'file' || !source || source.length > 16384 || source.startsWith('//')) return;
-  try {
-    let filename: string;
-    if (/^file:/i.test(source)) {
-      filename = vscode.Uri.parse(source).fsPath;
-    } else {
-      const spelling = source.split(/[?#]/, 1)[0];
-      const decoded = decodeURIComponent(spelling);
-      if (process.platform === 'win32' && /^[a-z]:[\\/]/i.test(decoded)) {
-        filename = path.normalize(decoded);
-      } else {
-        if (/^[a-z][a-z\d+.-]*:/i.test(decoded)) return;
-        const workspace = vscode.workspace.getWorkspaceFolder(document)?.uri;
-        filename = decoded.startsWith('/') && workspace?.scheme === 'file'
-          ? path.resolve(workspace.fsPath, '.' + decoded)
-          : path.resolve(path.dirname(document.fsPath), decoded);
-      }
-    }
-    const mime = imageTypes[path.extname(filename).toLowerCase()];
-    const candidates = roots.filter(root => root.scheme === 'file' && inside(root.fsPath, filename));
-    if (!mime || !candidates.length) return;
-    const canonical = await realpath(filename);
-    const approvedRoots = await Promise.allSettled(candidates.map(root => realpath(root.fsPath)));
-    if (!approvedRoots.some(root => root.status === 'fulfilled' && inside(root.value, canonical))) return;
+  let filename: string;
+  if (/^file:/i.test(source)) filename = vscode.Uri.parse(source).fsPath;
+  else {
+    const decoded = decodeURIComponent(source.split(/[?#]/, 1)[0]);
+    const windowsPath = process.platform === 'win32' && /^[a-z]:[\\/]/i.test(decoded);
+    if (!windowsPath && /^[a-z][a-z\d+.-]*:/i.test(decoded)) return;
+    const workspace = vscode.workspace.getWorkspaceFolder(document)?.uri;
+    filename = decoded.startsWith('/') && workspace?.scheme === 'file'
+      ? path.resolve(workspace.fsPath, '.' + decoded)
+      : path.resolve(path.dirname(document.fsPath), decoded);
+  }
+  const candidates = roots.filter(root => root.scheme === 'file' && inside(root.fsPath, filename));
+  if (!candidates.length) return;
+  const canonical = await realpath(filename);
+  const approvedRoots = await Promise.allSettled(candidates.map(root => realpath(root.fsPath)));
+  if (approvedRoots.some(root => root.status === 'fulfilled' && inside(root.value, canonical))) return { canonical, filename };
+}
 
-    const handle = await open(canonical, 'r');
+export async function imageReferenceStatus(source: string, document: vscode.Uri, roots: readonly vscode.Uri[]) {
+  if (/^(?:https?:|data:|blob:|\/\/)/i.test(source)) return 'ignored';
+  try {
+    const file = await resolveLocalImage(source, document, roots);
+    if (!file) return 'unverified';
+    return (await stat(file.canonical)).isFile() ? 'available' : 'missing';
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unverified';
+  }
+}
+
+export async function localImageData(source: string, document: vscode.Uri, roots: readonly vscode.Uri[]) {
+  try {
+    const file = await resolveLocalImage(source, document, roots);
+    if (!file) return;
+    const mime = imageTypes[path.extname(file.filename).toLowerCase()];
+    if (!mime) return;
+
+    const handle = await open(file.canonical, 'r');
     try {
       const stat = await handle.stat();
       if (!stat.isFile() || stat.size > maxBytes) return;

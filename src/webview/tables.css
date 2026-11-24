@@ -3,6 +3,8 @@
 .vditor-reset table :is(td,th){min-width:0!important;overflow-wrap:anywhere;white-space:normal;border:1px solid var(--accent,#8b949e)!important;padding:11px 16px;background:var(--bg,#fff)!important;color:var(--fg,#24292f)!important}
 .vditor-reset table th{background:color-mix(in srgb,var(--fg,#24292f) 7%,var(--bg,#fff))!important;font-weight:650;text-align:center}
 .vditor-reset table:has(>thead>tr>th [data-moye-table="auto"]){width:auto!important;table-layout:auto}
+.vditor-reset table[data-vm-column-widths]{width:var(--vm-table-width)!important;max-width:none!important;table-layout:fixed}
+.vditor-reset table[data-vm-column-widths] th{width:var(--vm-column-width);box-sizing:border-box}
 .vditor-reset table :is(td,th)[align="left"]{text-align:left}
 .vditor-reset table :is(td,th)[align="center"]{text-align:center}
 .vditor-reset table :is(td,th)[align="right"]{text-align:right}

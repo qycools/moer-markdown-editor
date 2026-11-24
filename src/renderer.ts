@@ -1,6 +1,7 @@
 import Vditor from '@local/vditor';
 import type { ExportOptions, Settings, ThemeDefinition } from './shared';
 import './webview/tables.css';
+import { applyTableWidths } from './webview/tableWidths';
 
 const cdn = new URL('../media/vditor', location.href).href;
 const diagramSelector = '.language-mermaid,.language-echarts,.language-mindmap,.language-markmap,.language-flowchart,.language-graphviz,.language-wavedrom,.language-abc,.language-smiles';
@@ -17,6 +18,7 @@ window.VM_RENDER = async ({ markdown, baseURL, options, settings, dark, appearan
     transform: (html: string) => {
       const template = document.createElement('template');
       template.innerHTML = html;
+      applyTableWidths(template.content);
       for (const image of template.content.querySelectorAll<HTMLImageElement>('img[src]')) {
         const source = image.getAttribute('src');
         if (source && !/^[a-z][a-z\d+.-]*:/i.test(source)) image.setAttribute('src', new URL(source, baseURL).href);

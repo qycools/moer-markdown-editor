@@ -1,4 +1,5 @@
 import DiffMatchPatch from 'diff-match-patch';
+import type { SourceLineRange } from '../shared';
 import { templateFor } from './contentMarkup';
 import { textareaOffsets } from './textareaMirror';
 
@@ -13,6 +14,41 @@ export function mapOffsets(before: string, after: string, offsets: number[]) {
   diff.Diff_Timeout = 0.2;
   const chunks = diff.diff_main(before, after, false);
   return offsets.map(offset => Math.max(0, Math.min(after.length, diff.diff_xIndex(chunks, offset))));
+}
+
+export function reconcileMarkdown(before: string, after: string, source: string) {
+  if (before === after) return source;
+  if (before === source) return after;
+  let markerSpace = '';
+  if (after.includes('<wbr data-moye-') || before.includes('<wbr data-moye-')) {
+    for (let code = 0xe000; code <= 0xf8ff; code++) {
+      const candidate = String.fromCharCode(code);
+      if (![before, after, source].some(value => value.includes(candidate))) { markerSpace = candidate; break; }
+    }
+    if (markerSpace) {
+      // Table padding must not match the space inside a layout tag.
+      const protect = (value: string) => value.replace(/<wbr (?=data-moye-(?:col-width="\d{1,4}"|table="auto")>)/g, '<wbr' + markerSpace);
+      before = protect(before); after = protect(after); source = protect(source);
+    }
+  }
+  const diff = new DiffMatchPatch();
+  diff.Diff_Timeout = 0.2;
+  const changes: { start: number; end: number; text: string }[] = [];
+  let offset = 0, change: (typeof changes)[number] | undefined;
+  for (const [operation, text] of diff.diff_main(before, after, false)) {
+    if (operation === 0) { offset += text.length; change = undefined; continue; }
+    if (!change) { change = { start: offset, end: offset, text: '' }; changes.push(change); }
+    if (operation < 0) { offset += text.length; change.end = offset; }
+    else change.text += text;
+  }
+  const positions = mapOffsets(before, source, changes.flatMap(({ start, end }) => [start, end]));
+  let result = '', cursor = 0;
+  for (const [index, { text }] of changes.entries()) {
+    result += source.slice(cursor, positions[index * 2]) + text;
+    cursor = positions[index * 2 + 1];
+  }
+  result += source.slice(cursor);
+  return markerSpace ? result.replaceAll(markerSpace, ' ') : result;
 }
 
 function markers(count: number) {
@@ -50,6 +86,26 @@ export function markdownOffsets(surface: HTMLElement, toMarkdown: Convert, markd
   for (const { range, token } of ranges) range.insertNode(document.createTextNode(token));
   const marked = readMarkers(normalizeMarkdown(toMarkdown(clone.innerHTML)), tokens);
   return marked && mapOffsets(marked.text, markdown, marked.offsets);
+}
+
+export function blockMarkdownOffsets(surface: HTMLElement, block: Element, toMarkdown: Convert, markdown: string) {
+  const index = Array.prototype.indexOf.call(surface.children, block);
+  if (index < 0) return;
+  const clone = surface.cloneNode(true) as HTMLElement, copy = clone.children[index];
+  const tokens = markers(2);
+  const boundaries = tokens.map(token => {
+    const paragraph = document.createElement('p');
+    paragraph.dataset.block = '0'; paragraph.textContent = token;
+    return paragraph;
+  });
+  copy.before(boundaries[0]); copy.after(boundaries[1]);
+  const marked = readMarkers(normalizeMarkdown(toMarkdown(clone.innerHTML)), tokens);
+  if (!marked) return;
+  const [left, right] = marked.offsets;
+  const part = marked.text.slice(left, right);
+  const start = left + (part.match(/^\n*/)?.[0].length || 0);
+  const end = right - (part.match(/\n*$/)?.[0].length || 0);
+  if (start < end) return mapOffsets(marked.text, markdown, [start, end]);
 }
 
 function visualText(root: Node) {
@@ -92,10 +148,82 @@ function visualRange(surface: HTMLElement, markdown: string, toDOM: Convert, sta
   return range;
 }
 
-export function selectMarkdownRange(surface: HTMLElement, markdown: string, toDOM: Convert, start: number, end: number, reveal = false) {
+export function sourceLineOffsets(markdown: string, lines: SourceLineRange) {
+  const rows = markdown.split('\n');
+  if (lines.start < 1 || lines.end < lines.start || lines.end > rows.length) return;
+  let start = 0, end = 0;
+  for (let index = 0; index < lines.end; index++) {
+    if (index === lines.start - 1) start = end;
+    end += rows[index].length + 1;
+  }
+  const first = rows[lines.start - 1], last = rows[lines.end - 1];
+  const leading = first.match(/^(?:[ \t]*>[ \t]?)*[ \t]*(?:(?:#{1,6}|[-+*]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?|\|[ \t]*)?/)?.[0].length ?? 0;
+  const trailing = last.length - last.trimEnd().length + Number(last.trimEnd().endsWith('|') && last.trimStart().startsWith('|'));
+  return { start, end: end - 1, visualStart: start + leading, visualEnd: Math.max(start + leading, end - 1 - trailing) };
+}
+
+type RevealPosition = 'center' | 'top';
+const lineJumpPadding = new WeakMap<HTMLElement, () => void>();
+
+function revealAtTop(scroll: HTMLElement, offset: number) {
+  lineJumpPadding.get(scroll)?.();
+  const top = Math.max(0, offset - 12);
+  if (top > scroll.scrollHeight - scroll.clientHeight) {
+    const property = 'padding-bottom';
+    const original = scroll.style.getPropertyValue(property), priority = scroll.style.getPropertyPriority(property);
+    const padding = parseFloat(getComputedStyle(scroll).paddingBottom);
+    const viewport = scroll.clientHeight;
+    const requiredHeight = top + viewport;
+    scroll.style.setProperty(property, `${padding + viewport}px`, 'important');
+    const extra = Math.max(0, Math.ceil(viewport + requiredHeight - scroll.scrollHeight));
+    const value = `${padding + extra}px`;
+    scroll.style.setProperty(property, value, 'important');
+    const listeners = new AbortController();
+    const reset = () => {
+      listeners.abort();
+      lineJumpPadding.delete(scroll);
+      if (scroll.style.getPropertyValue(property) === value && scroll.style.getPropertyPriority(property) === 'important') {
+        scroll.style.setProperty(property, original, priority);
+      }
+    };
+    lineJumpPadding.set(scroll, reset);
+    scroll.addEventListener('input', reset, { signal: listeners.signal });
+    scroll.addEventListener('scroll', () => {
+      if (scroll.scrollTop <= Math.max(0, scroll.scrollHeight - scroll.clientHeight - extra) + 1) reset();
+    }, { signal: listeners.signal });
+  }
+  scroll.scrollTop = top;
+}
+
+function revealRange(scroll: HTMLElement, range: Range, position: RevealPosition) {
+  const parent = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
+  const rect = range.getClientRects()[0];
+  const top = rect?.height ? rect.top : parent?.getBoundingClientRect().top;
+  if (top === undefined) return;
+  const offset = scroll.scrollTop + top - scroll.getBoundingClientRect().top;
+  if (position === 'top') revealAtTop(scroll, offset - scroll.clientTop);
+  else {
+    lineJumpPadding.get(scroll)?.();
+    scroll.scrollTop = offset - scroll.clientHeight / 2;
+  }
+}
+
+export function revealPreviewRange(content: HTMLElement, scroll: HTMLElement, markdown: string, toDOM: Convert, start: number, end: number) {
+  revealRange(scroll, visualRange(content, markdown, toDOM, start, end), 'top');
+}
+
+export function revealElementAtTop(target: HTMLElement, scroll: HTMLElement) {
+  revealAtTop(scroll, scroll.scrollTop + target.getBoundingClientRect().top - scroll.getBoundingClientRect().top - scroll.clientTop);
+}
+
+export function selectMarkdownRange(surface: HTMLElement, markdown: string, toDOM: Convert, start: number, end: number, reveal?: RevealPosition) {
   if (surface instanceof HTMLTextAreaElement) {
     surface.setSelectionRange(start, end);
-    if (reveal) surface.scrollTop = textareaOffsets(surface, [start])[0] - surface.clientHeight / 2;
+    if (reveal === 'top') revealAtTop(surface, textareaOffsets(surface, [start])[0]);
+    else if (reveal === 'center') {
+      lineJumpPadding.get(surface)?.();
+      surface.scrollTop = textareaOffsets(surface, [start])[0] - surface.clientHeight / 2;
+    }
     return;
   }
   const range = visualRange(surface, markdown, toDOM, start, end);
@@ -104,9 +232,5 @@ export function selectMarkdownRange(surface: HTMLElement, markdown: string, toDO
     const selection = getSelection()!;
     selection.removeAllRanges(); selection.addRange(range);
   }
-  if (reveal) {
-    const rect = range.getBoundingClientRect();
-    const top = rect.height ? rect.top : parent?.getBoundingClientRect().top;
-    if (top !== undefined) surface.scrollTop += top - surface.getBoundingClientRect().top - surface.clientHeight / 2;
-  }
+  if (reveal) revealRange(surface, range, reveal);
 }

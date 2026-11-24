@@ -27,6 +27,12 @@ export async function checkThemeUI(frame: Frame | Page, replaceDocument: (text: 
   await frame.locator(`[data-theme-id="${light}"]`).click();
   await frame.waitForFunction(()=>getComputedStyle(window.document.body).backgroundColor==='rgb(252, 248, 238)');
   await checkOutlineHover(frame, 'rgb(232, 232, 232)');
+  await frame.locator('[data-action=settings]').click();
+  const settingsColor = await frame.locator('#configure-shortcuts').evaluate(button => [
+    getComputedStyle(button).color, getComputedStyle(button.closest('.settings-group')!).color,
+  ]);
+  assert.equal(settingsColor[0], settingsColor[1]);
+  await frame.locator('#settings-done').click();
   const table = frame.locator('.vditor-ir table');
   assert.equal(await table.locator('td').first().evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(252, 248, 238)');
   assert.equal(await table.locator('tbody tr').last().evaluate(e=>getComputedStyle(e).backgroundColor),'rgba(0, 0, 0, 0)');
@@ -61,8 +67,8 @@ export async function checkThemeUI(frame: Frame | Page, replaceDocument: (text: 
     }
     assert.equal(await frame.locator('[data-highlight-color]').count(),8);
     if (value==='ir') await frame.locator('body').screenshot({path:'.test-results/selection-highlight-0.1.2.png'});
-    await frame.locator('[data-highlight-color="#ffd400"]').click();
-    await frame.waitForFunction(()=>window.VM_APP.getValue().includes('background-color: #ffd400'));
+    await frame.locator('[data-highlight-color="#fff176"]').click();
+    await frame.waitForFunction(()=>window.VM_APP.getValue().includes('background-color: #fff176'));
     const markdown=await frame.evaluate(()=>window.VM_APP.getValue());
     assert.ok(markdown.includes('**bold**'),'Highlight preserves bold');
     assert.ok(!markdown.includes('selection-colors')&&!markdown.includes('data-highlight-color'),'Palette does not serialize into Markdown');

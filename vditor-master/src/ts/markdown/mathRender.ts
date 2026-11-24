@@ -45,8 +45,9 @@ export const mathRender = (element: (HTMLElement | Document) = document, options
         addScript(`${options.cdn}/dist/js/katex/katex.min.js?v=0.16.9`, "vditorKatexScript").then(() => {
             addScript(`${options.cdn}/dist/js/katex/mhchem.min.js?v=0.16.9`, "vditorKatexChemScript").then(() => {
                 mathElements.forEach((mathElement) => {
-                    if (mathElement.parentElement.classList.contains("vditor-wysiwyg__pre") ||
-                        mathElement.parentElement.classList.contains("vditor-ir__marker--pre")) {
+                    const parent = mathElement.parentElement;
+                    if (!parent || parent.classList.contains("vditor-wysiwyg__pre") ||
+                        parent.classList.contains("vditor-ir__marker--pre")) {
                         return;
                     }
                     if (mathElement.getAttribute("data-math")) {
@@ -61,7 +62,7 @@ export const mathRender = (element: (HTMLElement | Document) = document, options
                             macros: options.math.macros,
                         });
                     } catch (e) {
-                        mathElement.innerHTML = e.message;
+                        mathElement.textContent = e.message;
                         mathElement.className = "language-math vditor-reset--error";
                     }
 

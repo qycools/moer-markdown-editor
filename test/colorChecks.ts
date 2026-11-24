@@ -44,10 +44,10 @@ export async function checkColorUI(frame: Frame | Page, replaceDocument: (text: 
     assert.equal(await frame.locator('[data-highlight-color]').count(), 8); assert.equal(await frame.locator('[data-text-color]').count(), 8);
     assert.equal(await frame.locator('[data-text-color]').first().evaluate(e => getComputedStyle(e, '::before').height), '3px', 'Foreground palette uses colored lines');
     if (value === 'ir') await frame.locator('body').screenshot({path:'.test-results/selection-colors-0.1.4.png'});
-    await frame.locator('[data-text-color="#26a7df"]').click(); await frame.waitForFunction(() => window.VM_APP.getValue().includes('color: #26a7df'));
-    await selectText(); await frame.locator('#selection-colors').waitFor({state:'visible'}); await frame.locator('[data-highlight-color="#ffd400"]').click();
-    await frame.waitForFunction(() => window.VM_APP.getValue().includes('background-color: #ffd400'));
-    const marked = await frame.evaluate(() => window.VM_APP.getValue()); assert.match(marked, /color: #26a7df/); assert.match(marked, /\*\*bold\*\*/);
+    await frame.locator('[data-text-color="#a8e5ff"]').click(); await frame.waitForFunction(() => window.VM_APP.getValue().includes('color: #a8e5ff'));
+    await selectText(); await frame.locator('#selection-colors').waitFor({state:'visible'}); await frame.locator('[data-highlight-color="#fff176"]').click();
+    await frame.waitForFunction(() => window.VM_APP.getValue().includes('background-color: #fff176'));
+    const marked = await frame.evaluate(() => window.VM_APP.getValue()); assert.match(marked, /color: #a8e5ff/); assert.match(marked, /\*\*bold\*\*/);
   }
   for (const value of ['ir', 'wysiwyg']) {
     await mode(value);

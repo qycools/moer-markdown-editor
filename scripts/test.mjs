@@ -10,7 +10,7 @@ await build({ entryPoints: ['test/platformChecks.ts'], outfile: 'dist/platform-c
 await (await import('../dist/platform-checks.mjs?test=' + Date.now())).checkPlatforms();
 await build({ entryPoints: ['src/export.ts'], outfile: 'dist/test-export.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
 const { exportDocument, findBrowser } = await import('../dist/test-export.mjs?test=' + Date.now());
-const { minimalEdit, validateExport, exportDefaults, defaults, actions, validPalette } = await import('../dist/shared.mjs?test=' + Date.now());
+const { minimalEdit, validateExport, exportDefaults, defaults, actions, validPalette, linkLineRange } = await import('../dist/shared.mjs?test=' + Date.now());
 assert.equal(validPalette([]),false); assert.equal(validPalette(Array(9).fill('#123456')),false); assert.equal(validPalette(['red']),false); assert.equal(validPalette(['#123456']),true);
 for (const [before, after] of [['abc', 'axc'], ['', '新文档'], ['a😀b', 'a😁b'], ['甲\r\n乙', '甲\r\n丙'], ['same', 'same']]) {
   const edit = minimalEdit(before, after);
@@ -20,6 +20,9 @@ assert.throws(() => validateExport({ ...exportDefaults, fontSize: 0 }));
 assert.throws(() => validateExport({ ...exportDefaults, topMargin: Infinity }));
 assert.equal(actions[0][0], 'outline');
 assert.equal(actions[1][0], 'mindmap');
+assert.deepEqual(linkLineRange('L14'), { start: 14, end: 14 });
+assert.deepEqual(linkLineRange('L14-L20'), { start: 14, end: 20 });
+for (const fragment of ['L0', 'L20-L14', 'L999999999999999999', 'chapter-l14']) assert.equal(linkLineRange(fragment), undefined);
 console.log('PASS document diff, export validation, and toolbar actions');
 const fixture = await readFile('test/fixtures/sample.md', 'utf8');
 const browser = await chromium.launch({ executablePath: await findBrowser(), headless: true, args: ['--allow-file-access-from-files'] });
@@ -33,7 +36,7 @@ const mockTheme = (name, kind, data) => { const c={...themeBase.colors,...data.c
 const themes=[mockTheme('Light','light',{}),mockTheme('Dark','dark',themeDark)];
 const boot = { themes, activeTheme:themes[0].id, codePalette:themes[0].tokens, cdn: pathToFileURL(path.resolve('media/vditor')).href, base: pathToFileURL(path.resolve('test/fixtures/功能验收.md')).href, settings: { ...defaults, theme: themes[0].id }, dark: false, filename: '功能验收.md' };
 const hostStyle = Object.entries(themeBase.colors).map(([key,value]) => `--vscode-${key.replaceAll('.','-')}:${value}`).join(';');
-const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>:root{${hostStyle}}</style><link href="${pathToFileURL(path.resolve('dist/webview.css')).href}" rel="stylesheet"></head><body><div id="app"><div id="editor"></div><footer id="status"></footer></div><div id="overlay"></div><script>window.VM_BOOT=${JSON.stringify(boot)};window.VM_MESSAGES=[];window.VM_DOCUMENT=${JSON.stringify(fixture)};window.acquireVsCodeApi=()=>({getState(){return{}},setState(){},postMessage(m){window.VM_MESSAGES.push(m);if(m.type==='ready'){setTimeout(()=>window.postMessage({type:'document',text:window.VM_DOCUMENT,version:1,initial:true},'*'),0)}else if(m.type==='edit'){if(window.VM_DOCUMENT!==m.baseText)throw Error('Stale document base');window.VM_DOCUMENT=m.text;setTimeout(()=>window.postMessage({type:'ack',seq:m.seq,text:m.text,version:m.seq+1},'*'),0)}else if(m.requestId){if(m.type==='clipboardWrite')window.VM_CLIPBOARD=m.text;setTimeout(()=>window.postMessage({type:'result',requestId:m.requestId,value:m.type==='browse'?'C:/Export':true},'*'),0)}}});</script><script src="${pathToFileURL(path.resolve('dist/webview.js')).href}"></script></body></html>`;
+const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>:root{${hostStyle}}</style><link href="${pathToFileURL(path.resolve('dist/webview.css')).href}" rel="stylesheet"></head><body><div id="app"><div id="editor"></div><footer id="status"></footer></div><div id="overlay"></div><script>window.VM_BOOT=${JSON.stringify(boot)};window.VM_MESSAGES=[];const execCommand=document.execCommand.bind(document);document.execCommand=(command,...args)=>{if(command!=='copy')return execCommand(command,...args);const data=new DataTransfer();const target=document.activeElement||document;target.dispatchEvent(new ClipboardEvent('copy',{bubbles:true,cancelable:true,clipboardData:data}));window.VM_CLIPBOARD=data.getData('text/plain');window.VM_CLIPBOARD_HTML=data.getData('text/html');return true};window.VM_DOCUMENT=${JSON.stringify(fixture)};window.acquireVsCodeApi=()=>({getState(){return{}},setState(){},postMessage(m){window.VM_MESSAGES.push(m);if(m.type==='ready'){setTimeout(()=>window.postMessage({type:'document',text:window.VM_DOCUMENT,version:1,initial:true},'*'),0)}else if(m.type==='edit'){if(window.VM_DOCUMENT!==m.baseText)throw Error('Stale document base');window.VM_DOCUMENT=m.text;setTimeout(()=>window.postMessage({type:'ack',seq:m.seq,text:m.text,version:m.seq+1},'*'),0)}else if(m.requestId){if(m.type==='clipboardWrite'){window.VM_CLIPBOARD=m.text;window.VM_CLIPBOARD_HTML='';}setTimeout(()=>window.postMessage({type:'result',requestId:m.requestId,value:m.type==='browse'?'C:/Export':m.type==='image'?'assets/clipboard.png':true},'*'),0)}}});</script><script src="${pathToFileURL(path.resolve('dist/webview.js')).href}"></script></body></html>`;
 await writeFile('.test-results/frontend.html', html);
 try {
   await page.goto(pathToFileURL(path.resolve('.test-results/frontend.html')).href);
@@ -54,7 +57,7 @@ try {
   assert.equal(await page.locator('.vditor-wysiwyg [data-vm-color]').filter({ hasText: '红色文字' }).evaluate(e => getComputedStyle(e).color), 'rgb(229, 57, 53)');
   await page.evaluate(() => { const e=document.querySelector('.vditor-wysiwyg strong');const range=document.createRange();range.selectNodeContents(e);const s=getSelection();s.removeAllRanges();s.addRange(range); });
   await page.locator('#selection-colors').waitFor({state:'visible'});
-  await page.locator('[data-text-color="#26a7df"]').click();
+  await page.locator('[data-text-color="#a8e5ff"]').click();
   await page.waitForFunction(() => window.VM_MESSAGES.some(m => m.type === 'edit'));
   await writeFile('.test-results/color-result.md', await page.evaluate(() => window.VM_DOCUMENT));
   await writeFile('.test-results/color-dom.html', await page.locator('.vditor-wysiwyg').innerHTML());
@@ -118,16 +121,32 @@ try {
   await ime.detach();
   console.log('PASS IME composition and commit');
   await build({ entryPoints: ['test/editorChecks.ts'], outfile: 'dist/editor-checks.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
-  const { checkEditorUI, checkFindAndFormatting, checkInlineSource, checkHistoryLocation, checkDocumentLinks } = await import('../dist/editor-checks.mjs?test=' + Date.now());
+  const { checkEditorUI, checkFindAndFormatting, checkSearchNavigation, checkSearchOptions, checkInlineSource, checkHistoryLocation, checkColorAndTableHistory, checkLiteralTextAndCopy, checkDocumentLinks, checkAnchorTargets, checkVisualLineJumps } = await import('../dist/editor-checks.mjs?test=' + Date.now());
   await checkFindAndFormatting(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,500); },text));
+  await checkSearchNavigation(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,500); },text),
+    () => page.locator('[data-action=search]').click());
+  await checkSearchOptions(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,500); },text));
   await checkInlineSource(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,500); },text));
+  await checkLiteralTextAndCopy(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,500); },text), () => page.evaluate(() => window.VM_CLIPBOARD));
   await checkHistoryLocation(page);
+  await checkColorAndTableHistory(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,500); },text),
+    text => page.waitForFunction(text => window.VM_DOCUMENT === text, text, { timeout: 5000 }), (action, text, offset) => page.evaluate(({ action, text, offset }) => {
+      window.VM_DOCUMENT = text; window.VM_APP.applyDocument(text, 514, { action, offset });
+    }, { action, text, offset }));
   await checkDocumentLinks(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,500); },text),
     () => page.evaluate(() => window.postMessage({ type: 'command', action: 'linkBack' }, '*')), async (click, href) => {
       const before = await page.evaluate(() => window.VM_MESSAGES.length);
       await click();
       assert.deepEqual(await page.evaluate(before => window.VM_MESSAGES.slice(before).filter(m => m.type === 'openLink'), before), [{ type: 'openLink', href }]);
     });
+  await checkVisualLineJumps(page, text => page.evaluate(text => { window.VM_DOCUMENT = text; window.VM_APP.applyDocument(text, 510); }, text));
+  await checkAnchorTargets(page, text => page.evaluate(text => { window.VM_DOCUMENT = text; window.VM_APP.applyDocument(text, 511); }, text));
+  await build({ entryPoints: ['test/contentChecks.ts'], outfile: 'dist/content-checks.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
+  const { checkDirectContentEditing, checkTableMarkerRepair, checkImagePersistence } = await import('../dist/content-checks.mjs?test=' + Date.now());
+  await checkTableMarkerRepair(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,514); },text), () => page.evaluate(() => window.VM_DOCUMENT));
+  await checkDirectContentEditing(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,515); },text));
+  await checkImagePersistence(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,516); },text),
+    () => page.evaluate(() => window.VM_DOCUMENT), () => page.evaluate(() => window.VM_CLIPBOARD));
   await checkEditorUI(page, text => page.evaluate(text => { window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,500); },text),
     () => page.evaluate(() => window.VM_CLIPBOARD || ''));
   await build({ entryPoints: ['test/themeChecks.ts'], outfile: 'dist/theme-checks.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
@@ -140,7 +159,10 @@ try {
   const { checkLayoutUI } = await import('../dist/layout-checks.mjs?test=' + Date.now());
   await checkLayoutUI(page, text => page.evaluate(text => {window.VM_DOCUMENT=text;window.VM_APP.applyDocument(text,700);},text), {read: () => page.evaluate(() => window.VM_CLIPBOARD || '')});
   await build({ entryPoints: ['test/clipboardChecks.ts'], outfile: 'dist/clipboard-checks.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
-  await (await import('../dist/clipboard-checks.mjs?test=' + Date.now())).checkClipboardItems(page);
+  const { checkClipboardItems, checkRichClipboard } = await import('../dist/clipboard-checks.mjs?test=' + Date.now());
+  await checkRichClipboard(page, text => page.evaluate(text => { window.VM_DOCUMENT = text; window.VM_APP.applyDocument(text, 708); }, text),
+    () => page.evaluate(() => ({ text: window.VM_CLIPBOARD, html: window.VM_CLIPBOARD_HTML })));
+  await checkClipboardItems(page);
   const longParagraph = '可阅读的段落摘录内容'.repeat(12);
   const mapDocument = [
     '# Root & scope', '', 'Intro paragraph.', '', '[TOC]', '', '## Branch one', '',

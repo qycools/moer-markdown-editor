@@ -1,5 +1,30 @@
 import { inlineToken, templateFor } from './contentMarkup';
 
+const clipboardMimeAliases: Record<string, string> = { 'image/x-png': 'image/png', 'image/x-ms-bmp': 'image/bmp', 'image/jpg': 'image/jpeg' };
+
+export function clipboardImages(clipboard: DataTransfer | null) {
+  if (!clipboard) return [];
+  const imageFiles = (files: (File | null)[]) => files.flatMap(file => {
+    if (!file) return [];
+    const type = clipboardMimeAliases[file.type] || file.type;
+    return !type.startsWith('image/') ? [] : [type === file.type ? file : new File([file], file.name, { type })];
+  });
+  const files = imageFiles([...clipboard.files]);
+  if (files.length) return files;
+  const items = imageFiles([...clipboard.items].filter(item => item.kind === 'file').map(item => item.getAsFile()));
+  if (items.length) return items;
+  const html = clipboard.getData?.('text/html');
+  if (!html) return [];
+  const fragment = templateFor(html).content;
+  if (fragment.textContent?.trim()) return [];
+  return [...fragment.querySelectorAll('img[src]')].flatMap(image => {
+    const data = /^data:(image\/(png|jpeg|gif|webp|bmp));base64,([\w+/=]+)$/i.exec(image.getAttribute('src') || '');
+    if (!data || data[3].length > 28 * 1024 * 1024) return [];
+    try { return [new File([Uint8Array.from(atob(data[3]), character => character.charCodeAt(0))], `clipboard.${data[2]}`, { type: data[1].toLowerCase() })]; }
+    catch { return []; }
+  });
+}
+
 export function installLocalImageFallback(root: HTMLElement, resolve: (source: string) => Promise<string | null>) {
   const attempted = new WeakMap<HTMLImageElement, string>();
   const pending = new Map<string, Promise<string | null>>();
@@ -39,7 +64,8 @@ function imageTarget(image: HTMLImageElement) {
     if (source) return { node, source, inline: true };
   }
   const source = document.createElement('img');
-  for (const name of ['src', 'alt', 'title', 'width', 'height', 'style']) {
+  for (const name of ['src', 'alt', 'title', 'width', 'height', 'style', 'srcset', 'sizes']) {
+    if (name === 'srcset' && image.dataset.vmLocalImage) continue;
     if (image.hasAttribute(name)) source.setAttribute(name, image.getAttribute(name)!);
   }
   const title = node.querySelector(':scope > .vditor-ir__marker--title')?.textContent?.trim();
@@ -55,104 +81,64 @@ export function canEditImage(image: HTMLImageElement) {
   return image.hasAttribute('src') && !image.closest('[data-type="code-block"], .vditor-copy');
 }
 
-export function fillImageTools(panel: HTMLElement, image: HTMLImageElement, editor: any, options: {
-  close: () => void;
-  commit: (caret: Range) => void;
-  copy: (text: string) => Promise<void>;
-  toast: (text: string, error?: boolean) => void;
-}) {
-  const target = imageTarget(image);
-  if (!target) {
-    panel.textContent = '无法匹配 HTML 源码中的图片。';
-    return;
-  }
-  const { node, source, html, inline } = target;
-  const { lute, currentMode: mode } = editor.vditor;
-  panel.innerHTML = `<form class="vm-image-form">
-    <div class="vm-image-fields">
-      <label>宽度 (px)<input name="width" type="number" min="1" max="100000" required></label>
-      <label>高度 (px)<input name="height" type="number" min="1" max="100000" required></label>
-      <label>比例 (%)<input name="scale" type="number" min="0.1" step="0.1" value="100"></label>
-    </div>
-    <output class="vm-image-status" hidden></output>
-    <div class="vm-content-actions">
-      <button type="button" data-image-action="copy" title="复制图片引用">复制</button>
-      <button type="button" data-image-action="delete">删除</button>
-      <button type="submit" class="primary" data-image-action="apply">应用</button>
-    </div>
-  </form>`;
-  const form = panel.querySelector('form')!;
-  const width = form.elements.namedItem('width') as HTMLInputElement;
-  const height = form.elements.namedItem('height') as HTMLInputElement;
-  const scale = form.elements.namedItem('scale') as HTMLInputElement;
-  const status = panel.querySelector<HTMLOutputElement>('output')!;
-  const dimension = (name: 'width' | 'height') => {
-    const pixels = source.style[name].match(/^(\d+(?:\.\d+)?)px$/)?.[1] || source.getAttribute(name);
-    return pixels && /^\d+(?:\.\d+)?$/.test(pixels) ? Math.round(Number(pixels)) : 0;
-  };
-  const naturalRatio = image.naturalWidth && image.naturalHeight ? image.naturalWidth / image.naturalHeight : 0;
-  const setWidth = dimension('width'), setHeight = dimension('height');
-  const baseWidth = setWidth || (setHeight && naturalRatio ? Math.round(setHeight * naturalRatio) : image.naturalWidth);
-  const baseHeight = setHeight || (setWidth && naturalRatio ? Math.round(setWidth / naturalRatio) : image.naturalHeight);
-  width.value = baseWidth ? String(baseWidth) : '';
-  height.value = baseHeight ? String(baseHeight) : '';
-  scale.disabled = !baseWidth || !baseHeight;
-  scale.title = '以打开浮窗时的尺寸为 100%';
-  const updateStatus = () => {
-    status.hidden = !image.complete || !!image.naturalWidth;
-    status.textContent = status.hidden ? '' : `图片加载失败：${source.getAttribute('src')}`;
-    status.title = status.textContent;
-  };
-  if (!image.naturalWidth) image.addEventListener('load', updateStatus, { once: true });
-  updateStatus();
-  scale.oninput = () => {
-    const factor = scale.valueAsNumber / 100;
-    if (!(factor > 0)) return;
-    width.value = String(Math.max(1, Math.round(baseWidth * factor)));
-    height.value = String(Math.max(1, Math.round(baseHeight * factor)));
-  };
-  width.oninput = height.oninput = () => { scale.value = ''; };
-  const caret = () => { const range = document.createRange(); range.setStartBefore(node); range.collapse(true); return range; };
+type ImageChange = { width: number; height: number } | { align: 'left' | 'center' | 'right' };
+export type CommitImageEdit = (node: HTMLElement, replacement: string, update: () => void) => boolean;
 
-  form.onsubmit = event => {
-    event.preventDefault();
-    if (!node.isConnected || !form.reportValidity()) return;
-    const range = caret();
-    for (const [name, value] of [['width', width.value], ['height', height.value]]) {
-      source.setAttribute(name, value);
-      source.style.removeProperty(name);
-    }
-    if (!source.style.length) source.removeAttribute('style');
-    if (html) {
-      html.code.textContent = html.markup.innerHTML;
+export function changeImage(image: HTMLImageElement, change: ImageChange, editor: any, commit: CommitImageEdit) {
+  const target = imageTarget(image);
+  if (!target || !target.node.isConnected) return;
+  const { node, source, html } = target;
+  if ('width' in change) {
+    source.width = change.width; source.height = change.height;
+    source.style.removeProperty('width');
+    source.style.height = 'auto';
+  } else {
+    source.style.display = 'block';
+    for (const property of ['float', 'margin-inline', 'margin-inline-start', 'margin-inline-end']) source.style.removeProperty(property);
+    source.style.marginLeft = change.align === 'left' ? '0' : 'auto';
+    source.style.marginRight = change.align === 'right' ? '0' : 'auto';
+  }
+  if (html) {
+    const markup = html.markup.innerHTML;
+    if (commit(html.block, markup, () => {
+      html.code.textContent = markup;
       for (const name of ['width', 'height', 'style']) {
         if (source.hasAttribute(name)) image.setAttribute(name, source.getAttribute(name)!);
         else image.removeAttribute(name);
       }
-    } else {
-      const replacement = inlineToken(lute, mode, sizedMarkup(source));
-      if (!replacement) return;
-      node.replaceWith(replacement);
-    }
-    options.close();
-    options.commit(range);
-  };
-  panel.querySelector<HTMLButtonElement>('[data-image-action=copy]')!.onclick = () => {
-    const toMarkdown = mode === 'ir' ? lute.VditorIRDOM2Md : lute.VditorDOM2Md;
-    const text = (html || inline) ? sizedMarkup(source) : toMarkdown(node.outerHTML).trim();
-    void options.copy(text).then(() => options.toast('图片引用已复制'), error => options.toast(error.message, true));
-  };
-  panel.querySelector<HTMLButtonElement>('[data-image-action=delete]')!.onclick = () => {
-    if (!node.isConnected) return;
-    const range = caret();
-    if (html) {
-      source.remove();
-      html.code.textContent = html.markup.innerHTML;
-      if (!html.markup.innerHTML.trim()) html.block.remove();
-    }
-    node.remove();
-    options.close();
-    options.commit(range);
-  };
-  width.focus({ preventScroll: true });
+    })) return image;
+    return;
+  }
+  const markup = sizedMarkup(source);
+  const replacement = inlineToken(editor.vditor.lute, editor.vditor.currentMode, markup);
+  const updated = replacement?.querySelector('img');
+  if (!replacement || !updated) return;
+  if (commit(node, markup, () => node.replaceWith(replacement))) return updated;
+}
+
+export function imageReference(image: HTMLImageElement, editor: any) {
+  const target = imageTarget(image);
+  if (!target) return;
+  if (target.html || target.inline || image.dataset.type === 'link-ref' ||
+    target.node.querySelector(':scope > .vditor-ir__marker--link')?.textContent?.startsWith('[')) return sizedMarkup(target.source);
+  const { lute, currentMode } = editor.vditor;
+  return (currentMode === 'ir' ? lute.VditorIRDOM2Md : lute.VditorDOM2Md)(target.node.outerHTML).trim();
+}
+
+export function removeImage(image: HTMLImageElement, commit: CommitImageEdit) {
+  const target = imageTarget(image);
+  if (!target?.node.isConnected) return;
+  const range = document.createRange(); range.setStartBefore(target.node); range.collapse(true);
+  if (target.html) {
+    target.source.remove();
+    const { html } = target;
+    const markup = html.markup.innerHTML;
+    if (commit(html.block, markup, () => {
+      html.code.textContent = markup;
+      if (!markup.trim()) html.block.remove();
+      else image.remove();
+    })) return range;
+  } else if (commit(target.node, '', () => target.node.remove())) {
+    return range;
+  }
 }

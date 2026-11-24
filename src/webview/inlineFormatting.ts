@@ -3,7 +3,8 @@ import { markdownOffsets, renderedText } from './documentPositions';
 
 export type InlineFormat = 'bold' | 'italic';
 type SourceEdit = { text: string; start: number; end: number };
-const formats = { bold: { tags: 'strong,b', marks: ['**', '__'] }, italic: { tags: 'em,i', marks: ['*', '_'] } } as const;
+type Delimiters = readonly [string, string];
+const formats = { bold: { tags: 'strong,b', marks: ['**', '__'], html: ['<strong>', '</strong>'] }, italic: { tags: 'em,i', marks: ['*', '_'], html: ['<em>', '</em>'] } } as const;
 const zeroWidth = '\u200b';
 
 function trimRange(text: string, start: number, end: number) {
@@ -11,14 +12,14 @@ function trimRange(text: string, start: number, end: number) {
   return [start + selected.length - selected.trimStart().length, start + selected.trimEnd().length];
 }
 
-function wrap(text: string, marker: string) {
+function wrap(text: string, [open, close]: Delimiters) {
   const core = text.trim();
   if (!core) return text;
   const start = text.indexOf(core);
-  return text.slice(0, start) + marker + core + marker + text.slice(start + core.length);
+  return text.slice(0, start) + open + core + close + text.slice(start + core.length);
 }
 
-function formatLines(text: string, start: number, end: number, marks: readonly string[]): SourceEdit | undefined {
+function formatLines(text: string, start: number, end: number, marks: readonly Delimiters[]): SourceEdit | undefined {
   let next = '', last = 0, from = -1, to = -1, fence = '';
   for (const match of text.matchAll(/[^\n]*(?:\n|$)/g)) {
     const line = match[0].replace(/\n$/, ''), lineStart = match.index;
@@ -35,28 +36,29 @@ function formatLines(text: string, start: number, end: number, marks: readonly s
     const [left, right] = trimRange(text, Math.max(start, lineStart + prefix.length), Math.min(end, lineStart + line.length));
     if (left >= right) continue;
     const selected = text.slice(left, right);
-    const paired = marks.find(mark => selected.length > 2 * mark.length && selected.startsWith(mark) && selected.endsWith(mark)
-      && selected[mark.length] !== mark[0] && selected.at(-mark.length - 1) !== mark[0]);
-    const marker = marks[0];
+    const paired = marks.find(([open, close]) => selected.length > open.length + close.length && selected.startsWith(open) && selected.endsWith(close)
+      && (open !== close || (selected[open.length] !== open[0] && selected.at(-close.length - 1) !== close[0])));
+    const [open, close] = marks[0];
     next += text.slice(last, left);
-    const inner = paired ? selected.slice(paired.length, -paired.length) : selected;
-    if (!paired) next += marker;
+    const inner = paired ? selected.slice(paired[0].length, -paired[1].length) : selected;
+    if (!paired) next += open;
     if (from < 0) from = next.length;
     next += inner;
     to = next.length;
-    if (!paired) next += marker;
+    if (!paired) next += close;
     last = right;
   }
   return from >= 0 ? { text: next + text.slice(last), start: from, end: to } : undefined;
 }
 
-function removeFormat(text: string, start: number, end: number, innerStart: number, innerEnd: number, mark: string): SourceEdit | undefined {
-  const from = innerStart - mark.length, to = innerEnd + mark.length;
-  if (from < 0 || text.slice(from, innerStart) !== mark || text.slice(innerEnd, to) !== mark) return;
-  if (start === end) return { text: text.slice(0, from) + text.slice(innerStart, innerEnd) + text.slice(to), start: start - mark.length, end: start - mark.length };
-  const before = wrap(text.slice(innerStart, start), mark);
+function removeFormat(text: string, start: number, end: number, innerStart: number, innerEnd: number, delimiters: Delimiters): SourceEdit | undefined {
+  const [open, close] = delimiters;
+  const from = innerStart - open.length, to = innerEnd + close.length;
+  if (from < 0 || text.slice(from, innerStart) !== open || text.slice(innerEnd, to) !== close) return;
+  if (start === end) return { text: text.slice(0, from) + text.slice(innerStart, innerEnd) + text.slice(to), start: start - open.length, end: start - open.length };
+  const before = wrap(text.slice(innerStart, start), delimiters);
   const selected = text.slice(start, end);
-  const after = wrap(text.slice(end, innerEnd), mark);
+  const after = wrap(text.slice(end, innerEnd), delimiters);
   const offset = from + before.length;
   return { text: text.slice(0, from) + before + selected + after + text.slice(to), start: offset, end: offset + selected.length };
 }
@@ -64,10 +66,11 @@ function removeFormat(text: string, start: number, end: number, innerStart: numb
 function elementAt(node: Node) { return node instanceof Element ? node : node.parentElement; }
 
 export function formatInline(surface: HTMLElement, action: InlineFormat, markdown: string, toMarkdown: (html: string) => string, toDOM: (text: string) => string): SourceEdit | undefined {
-  const { tags, marks } = formats[action];
+  const { tags, marks, html } = formats[action];
+  const markdownMarks = marks.map(mark => [mark, mark] as const);
   const formatSelection = (text: string, start: number, end: number) => {
     const content = renderedText(text, toDOM);
-    for (const delimiters of [marks, [...marks].reverse()]) {
+    for (const delimiters of [markdownMarks, [...markdownMarks].reverse(), [html]]) {
       const edit = formatLines(text, start, end, delimiters);
       if (edit && renderedText(edit.text, toDOM) === content) return edit;
     }
@@ -76,7 +79,7 @@ export function formatInline(surface: HTMLElement, action: InlineFormat, markdow
     const { selectionStart: start, selectionEnd: end, value } = surface;
     if (start !== end) {
       const [left, right] = trimRange(value, start, end);
-      if (left < right && !value.slice(left, right).includes('\n')) for (const mark of marks) {
+      if (left < right && !value.slice(left, right).includes('\n')) for (const mark of [...markdownMarks, html]) {
         const edit = removeFormat(value, left, right, left, right, mark);
         if (edit && renderedText(edit.text, toDOM) === renderedText(value, toDOM)) return edit;
       }
@@ -113,11 +116,12 @@ export function formatInline(surface: HTMLElement, action: InlineFormat, markdow
     }
   }
   const points = [{ node: range.startContainer, offset: range.startOffset }, { node: range.endContainer, offset: range.endOffset }];
-  if (sameFormat) points.push({ node: sameFormat, offset: 0 }, { node: sameFormat, offset: sameFormat.childNodes.length });
+  const edges = sameFormat?.hasAttribute('data-vm-inline-format') ? 1 : 0;
+  if (sameFormat) points.push({ node: sameFormat, offset: edges }, { node: sameFormat, offset: sameFormat.childNodes.length - edges });
   const offsets = markdownOffsets(surface, toMarkdown, markdown, points);
   if (!offsets) return;
   const [start, end, innerStart, innerEnd] = offsets;
-  if (sameFormat) for (const mark of marks) {
+  if (sameFormat) for (const mark of [...markdownMarks, html]) {
     const edit = removeFormat(markdown, start, end, innerStart, innerEnd, mark);
     if (edit && renderedText(edit.text, toDOM) === renderedText(markdown, toDOM)) return edit;
   }

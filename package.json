@@ -2,7 +2,7 @@
   "name": "moye-markdown",
   "displayName": "墨尔 markdown editor",
   "description": "支持可视化编辑、颜色排版、公式图表与 PDF / HTML / Word 导出的 Markdown 编辑器。",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "qycools",
   "license": "MIT",
   "engines": {
@@ -182,8 +182,48 @@
         "enablement": "activeCustomEditorId == vditorMarkdown.editor"
       },
       {
+        "command": "vditorMarkdown.blockSource",
+        "title": "墨尔 markdown editor: 编辑当前块源码",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.imageResources",
+        "title": "墨尔 markdown editor: 管理图片资源",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
         "command": "vditorMarkdown.linkBack",
         "title": "墨尔 markdown editor: 返回文档内链接起点",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.imageLeft",
+        "title": "墨尔 markdown editor: 图片靠左",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.imageCenter",
+        "title": "墨尔 markdown editor: 图片居中",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.imageRight",
+        "title": "墨尔 markdown editor: 图片靠右",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.tableLeft",
+        "title": "墨尔 markdown editor: 表格列靠左",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.tableCenter",
+        "title": "墨尔 markdown editor: 表格列居中",
+        "enablement": "activeCustomEditorId == vditorMarkdown.editor"
+      },
+      {
+        "command": "vditorMarkdown.tableRight",
+        "title": "墨尔 markdown editor: 表格列靠右",
         "enablement": "activeCustomEditorId == vditorMarkdown.editor"
       }
     ],
@@ -249,6 +289,12 @@
         "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen"
       },
       {
+        "command": "vditorMarkdown.blockSource",
+        "key": "ctrl+alt+b",
+        "mac": "cmd+alt+b",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen && editorAreaFocus"
+      },
+      {
         "command": "vditorMarkdown.redo",
         "key": "cmd+y",
         "when": "isMac && activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen"
@@ -257,6 +303,42 @@
         "command": "vditorMarkdown.linkBack",
         "key": "escape",
         "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen && editorAreaFocus && !inputFocus && vditorMarkdown.canGoBack"
+      },
+      {
+        "command": "vditorMarkdown.imageCenter",
+        "key": "ctrl+e",
+        "mac": "cmd+e",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen && editorAreaFocus && vditorMarkdown.imageSelected"
+      },
+      {
+        "command": "vditorMarkdown.tableCenter",
+        "key": "ctrl+e",
+        "mac": "cmd+e",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen && editorAreaFocus && vditorMarkdown.tableSelected && !vditorMarkdown.imageSelected"
+      },
+      {
+        "command": "vditorMarkdown.imageLeft",
+        "key": "ctrl+l",
+        "mac": "cmd+l",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen && editorAreaFocus && vditorMarkdown.imageSelected"
+      },
+      {
+        "command": "vditorMarkdown.tableLeft",
+        "key": "ctrl+l",
+        "mac": "cmd+l",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen && editorAreaFocus && vditorMarkdown.tableSelected && !vditorMarkdown.imageSelected"
+      },
+      {
+        "command": "vditorMarkdown.imageRight",
+        "key": "ctrl+r",
+        "mac": "cmd+r",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen && editorAreaFocus && vditorMarkdown.imageSelected"
+      },
+      {
+        "command": "vditorMarkdown.tableRight",
+        "key": "ctrl+r",
+        "mac": "cmd+r",
+        "when": "activeCustomEditorId == vditorMarkdown.editor && !vditorMarkdown.dialogOpen && editorAreaFocus && vditorMarkdown.tableSelected && !vditorMarkdown.imageSelected"
       }
     ],
     "menus": {
@@ -404,14 +486,14 @@
             "pattern": "^#[0-9a-fA-F]{6}$"
           },
           "default": [
-            "#ffd400",
-            "#ff6268",
-            "#62ad2e",
-            "#26a7df",
-            "#a68be3",
-            "#e46ae8",
-            "#f49a35",
-            "#aaaaaa"
+            "#fff176",
+            "#ffc2c4",
+            "#c9ffa3",
+            "#a8e5ff",
+            "#dbccff",
+            "#fdbdff",
+            "#ffd9ad",
+            "#dbdbdb"
           ]
         },
         "vditorMarkdown.backgroundColors": {
@@ -423,14 +505,14 @@
             "pattern": "^#[0-9a-fA-F]{6}$"
           },
           "default": [
-            "#ffd400",
-            "#ff6268",
-            "#62ad2e",
-            "#26a7df",
-            "#a68be3",
-            "#e46ae8",
-            "#f49a35",
-            "#aaaaaa"
+            "#fff176",
+            "#ffc2c4",
+            "#c9ffa3",
+            "#a8e5ff",
+            "#dbccff",
+            "#fdbdff",
+            "#ffd9ad",
+            "#dbdbdb"
           ]
         }
       }
@@ -449,11 +531,13 @@
     "docx": "^9.5.1",
     "json5": "^2.2.3",
     "linkedom": "^0.18.12",
-    "playwright-core": "^1.56.1"
+    "playwright-core": "^1.56.1",
+    "yazl": "3.3.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "1.95.0",
+    "@types/yazl": "3.3.1",
     "@vscode/codicons": "^0.0.46-24",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.6.0",

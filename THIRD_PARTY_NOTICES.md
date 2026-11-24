@@ -8,4 +8,6 @@
 
 本扩展直接构建本地源码，适配了外部脚本加载、JSON5 图表配置解析、Mermaid 严格渲染、差异库导入、代码复制事件和 Graphviz 的 Webview 渲染路径，并修复了 SMILES 渲染节点及脚本标识冲突。公式、图表、图标及语法高亮组件来自 Vditor 自带资源；其原始许可声明保留在随包资源中。
 
+ZIP 打包使用 yazl 和 buffer-crc32。原始许可保留于 `media/licenses/`。
+
 文档生成使用 docx（MIT）；浏览器调用使用 playwright-core（Apache-2.0）；HTML 处理使用 linkedom（ISC）；差异处理使用 diff-match-patch（Apache-2.0）；图表配置解析使用 JSON5（MIT）。依赖版本记录于 `package-lock.json`。
